@@ -16,6 +16,8 @@
 
 ---
 
+![DoomForge 3D editor showing a selected model on the workplane](media/doomforge-editor.png)
+
 ## ⚡ Présentation
 
 **DoomForge 3D** transforme la puissance d'un éditeur CAO 3D moderne en un atelier complet de création de niveaux et de mondes pour les jeux de tir rétro style **Doom / Doom II**.
