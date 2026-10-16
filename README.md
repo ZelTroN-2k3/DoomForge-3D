@@ -9,7 +9,7 @@
     <a href="LICENSE"><img alt="GNU AGPLv3 license" src="https://img.shields.io/badge/license-AGPLv3-e11d48"></a>
     <a href="https://github.com/ZelTroN-2k3/DoomForge-3D"><img alt="GitHub repo" src="https://img.shields.io/badge/github-ZelTroN--2k3%2FDoomForge--3D-18181b?logo=github"></a>
     <img alt="Local first" src="https://img.shields.io/badge/local--first-no%20account-0ea5e9">
-    <img alt="Version v1.0.14" src="https://img.shields.io/badge/version-v1.0.14-22c55e">
+    <img alt="Version v1.0.23" src="https://img.shields.io/badge/version-v1.0.23-22c55e">
     <img alt="WAD & PK3 supported" src="https://img.shields.io/badge/maps-WAD%20%7C%20PK3%20%7C%20UDMF-f59e0b">
   </p>
 </div>

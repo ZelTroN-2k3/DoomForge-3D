@@ -1,7 +1,7 @@
 {
   "name": "doomforge-3d",
   "productName": "DoomForge 3D",
-  "version": "1.0.14",
+  "version": "1.0.23",
   "private": true,
   "description": "A 3D level designer and world builder for retro FPS games like Doom and Doom 2.",
   "author": {
