@@ -1022,7 +1022,7 @@ export default function Home() {
       openEditor(project.id, { allowMissingFromStorage: true });
       return { ok: true, message: sharedProject ? `Opened shared project ${sharedProject.name}` : `Opened ${file.name} as a new editable local project` };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not open Cadverix 3D project";
+      const message = error instanceof Error ? error.message : "Could not open DoomForge 3D project";
       setDashboardNotice(message);
       return { ok: false, message };
     }
@@ -1612,11 +1612,11 @@ function Dashboard({
         if (result.updateAvailable && result.latestVersion) {
           setUpdateMessage(
             result.downloaded
-              ? `Cadverix 3D ${result.latestVersion} is ready to install.`
-              : `Cadverix 3D ${result.latestVersion} is available. Press Update to download, install, and restart.`,
+              ? `DoomForge 3D ${result.latestVersion} is ready to install.`
+              : `DoomForge 3D ${result.latestVersion} is available. Press Update to download, install, and restart.`,
           );
         } else if (alwaysPrompt) {
-          setUpdateMessage("Cadverix 3D is up to date.");
+          setUpdateMessage("DoomForge 3D is up to date.");
         }
         return;
       }
@@ -1632,7 +1632,7 @@ function Dashboard({
           setUpdatePromptOpen(true);
         }
       } else if (alwaysPrompt && !payload.checkError) {
-        setUpdateMessage("Cadverix 3D is up to date.");
+        setUpdateMessage("DoomForge 3D is up to date.");
       }
     } catch (error) {
       setUpdateMessage(error instanceof Error ? error.message : "Could not check for updates");
@@ -1662,7 +1662,7 @@ function Dashboard({
     const desktop = window.cadverixDesktop ?? window.sketchforgeDesktop;
     if (desktop) {
       setUpdateStarting(true);
-      setUpdateMessage(`Downloading Cadverix 3D ${updateStatus.latestVersion ?? "update"}…`);
+      setUpdateMessage(`Downloading DoomForge 3D ${updateStatus.latestVersion ?? "update"}…`);
       try {
         const result = await desktop.installUpdate();
         if (result.error) throw new Error(result.error);
@@ -1677,9 +1677,9 @@ function Dashboard({
             requiresUpdateKey: false,
             updateMode: "desktop",
           });
-          setUpdateMessage("Cadverix 3D is already up to date.");
+          setUpdateMessage("DoomForge 3D is already up to date.");
         } else {
-          setUpdateMessage("Update downloaded. Cadverix 3D is restarting to install it…");
+          setUpdateMessage("Update downloaded. DoomForge 3D is restarting to install it…");
         }
       } catch (error) {
         setUpdateMessage(error instanceof Error ? error.message : "Could not install the update");
@@ -1714,7 +1714,7 @@ function Dashboard({
       setUpdateKey("");
       if (payload.updateMode === "local" || updateStatus.updateMode === "local") {
         const expectedVersion = updateStatus.latestVersion;
-        setUpdateMessage("Update installed. Restarting local Cadverix 3D…");
+        setUpdateMessage("Update installed. Restarting local DoomForge 3D…");
         await new Promise((resolve) => window.setTimeout(resolve, 1800));
         for (let attempt = 0; attempt < 60; attempt += 1) {
           try {
@@ -1731,7 +1731,7 @@ function Dashboard({
           }
           await new Promise((resolve) => window.setTimeout(resolve, 500));
         }
-        setUpdateMessage("Update installed. Reload this page once local Cadverix 3D finishes restarting.");
+        setUpdateMessage("Update installed. Reload this page once local DoomForge 3D finishes restarting.");
       } else {
         setUpdateMessage("Update started. The server may briefly go offline; reopen this page after it restarts.");
       }
@@ -2058,7 +2058,7 @@ function Dashboard({
         <section className="dashboard-confirm-overlay" role="dialog" aria-modal="true" aria-labelledby="app-update-title">
           <div className="dashboard-confirm-dialog dashboard-update-dialog">
             <header>
-              <strong id="app-update-title">Cadverix 3D {updateStatus.latestVersion} is available</strong>
+              <strong id="app-update-title">DoomForge 3D {updateStatus.latestVersion} is available</strong>
               <button type="button" aria-label="Dismiss update" onClick={dismissUpdate} disabled={updateStarting}>
                 <X size={18} />
               </button>
@@ -2067,7 +2067,7 @@ function Dashboard({
               <p>Do you want to update from version {updateStatus.currentVersion}?</p>
               <div className="dashboard-update-safety">
                 {updateStatus.updateMode === "local" ? (
-                  <>Your browser projects are kept. The updater only replaces the local Cadverix 3D application files.</>
+                  <>Your browser projects are kept. The updater only replaces the local DoomForge 3D application files.</>
                 ) : (
                   <>Your projects are kept. Private projects stay in this browser, and Docker shared projects remain in the persistent <code>/data/projects</code> volume.</>
                 )}
