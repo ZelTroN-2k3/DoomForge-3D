@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "cadverix": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/cadverix-3d/scripts/cadverix-mcp-server.mjs"
+      ]
+    }
+  }
+}

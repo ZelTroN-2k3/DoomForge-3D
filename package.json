@@ -1,0 +1,96 @@
+{
+  "name": "doomforge-3d",
+  "productName": "DoomForge 3D",
+  "version": "1.0.14",
+  "private": true,
+  "description": "A 3D level designer and world builder for retro FPS games like Doom and Doom 2.",
+  "author": {
+    "name": "SketchForge contributors"
+  },
+  "homepage": "https://github.com/ZelTroN-2k3/DoomForge-3D",
+  "desktopName": "cadverix-3d",
+  "main": "apps/desktop/main.cjs",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "postinstall": "node patches/apply.mjs",
+    "copy:occt": "node scripts/copy-occt-wasm.mjs",
+    "brand:icons": "node scripts/generate-brand-icons.mjs",
+    "printers:sync": "node scripts/sync-printer-presets.mjs",
+    "predev": "npm run copy:occt",
+    "dev": "next dev apps/web --webpack",
+    "prebuild": "npm run copy:occt",
+    "build": "next build apps/web --webpack",
+    "preexport": "npm run copy:occt",
+    "export": "node scripts/build-static-export.mjs",
+    "verify:static-worker-assets": "node scripts/verify-static-worker-assets.mjs",
+    "start": "next start apps/web",
+    "typecheck": "tsc -p apps/web/tsconfig.json --noEmit",
+    "test": "vitest run --config tests/vitest.config.ts",
+    "test:watch": "vitest --config tests/vitest.config.ts",
+    "test:e2e": "vitest run --config tests/vitest.e2e.config.ts",
+    "test:mobile": "playwright test --config tests/playwright.mobile.config.ts",
+    "test:offline": "node scripts/test-offline-app.mjs",
+    "perf": "vitest run --config tests/vitest.perf.config.ts --reporter verbose",
+    "ci": "npm run typecheck && npm run test",
+    "docker:build": "docker build -f deploy/docker/Dockerfile -t cadverix-3d:local .",
+    "docker:run": "docker run --rm -p 3000:3000 -e CADVERIX_SHARED_PROJECTS_DIR=/data/projects -v sketchforge-shared-projects:/data/projects cadverix-3d:local",
+    "docker:up": "docker compose -f deploy/docker/compose.yaml up --build -d",
+    "docker:down": "docker compose -f deploy/docker/compose.yaml down",
+    "desktop:dev": "node apps/desktop/dev.mjs",
+    "desktop:web:build": "node apps/desktop/build-web.mjs",
+    "desktop:pack": "npm run desktop:web:build && electron-builder --dir --config apps/desktop/electron-builder.yml",
+    "desktop:dist": "npm run desktop:web:build && electron-builder --config apps/desktop/electron-builder.yml",
+    "mcp:cadverix": "node scripts/cadverix-mcp-server.mjs",
+    "mcp:sketchforge": "node scripts/cadverix-mcp-server.mjs"
+  },
+  "dependencies": {
+    "@tailwindcss/postcss": "^4.1.8",
+    "@types/three": "^0.184.1",
+    "brepjs": "^18.118.0",
+    "clsx": "^2.1.1",
+    "electron-updater": "^6.8.9",
+    "fflate": "^0.8.3",
+    "lucide-react": "^0.511.0",
+    "manifold-3d": "^3.5.1",
+    "next": "^16.3.8",
+    "node-gyp": "^12.4.0",
+    "occt-wasm": "^3.6.1",
+    "react": "^19.1.0",
+    "react-colorful": "^5.8.0",
+    "react-dom": "^19.1.0",
+    "rebuild": "^0.1.2",
+    "tailwind-merge": "^3.3.0",
+    "tailwindcss": "^4.1.8",
+    "three": "^0.184.0",
+    "three-bvh-csg": "^0.0.18",
+    "three-mesh-bvh": "^0.9.13"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^22.15.18",
+    "@types/react": "^19.1.4",
+    "@types/react-dom": "^19.1.5",
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3",
+    "js-yaml": "^4.3.2",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.11",
+    "wrangler": "4.144.0"
+  },
+  "overrides": {
+    "@electron/get": "5.1.0",
+    "undici": "8.10.2",
+    "sharp": "0.35.4",
+    "next": {
+      "postcss": "8.5.23"
+    }
+  },
+  "allowScripts": {
+    "node-gyp@12.4.0": true,
+    "electron-winstaller@5.4.0": false,
+    "fsevents@2.3.3": false
+  }
+}

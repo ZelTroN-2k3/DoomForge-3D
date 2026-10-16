@@ -1,0 +1,94 @@
+export type CadModifierKind = "chamfer" | "fillet";
+
+export type CadModifierEdge = {
+  id: number;
+  owner?: number;
+  points: number[];
+  display: boolean;
+  selectable: boolean;
+  angle: number;
+  boundary: boolean;
+  manifold: boolean;
+  /** Inward horizontal displacement per unit downward travel of a planar wall. */
+  topWallSlope?: number;
+};
+
+export type CadModifierQuality = "draft" | "standard" | "fine";
+
+export type CadModifierFaultDiagnostic = {
+  phase: string;
+  operation: CadModifierKind | "prepare" | "dispose" | "shell";
+  strategy: "native-edge" | "planar-rim";
+  edgeIds: number[];
+  amount?: number;
+  rawMessage: string;
+  stack?: string;
+};
+
+export type CadModifierDisplayEdge = {
+  points: number[];
+};
+
+export type CadModifierPrimitivePart = {
+  kind: "box";
+  width: number;
+  depth: number;
+  height: number;
+  transform?: number[];
+};
+
+export type CadModifierMeshPart = {
+  positions?: Float32Array;
+  indices?: Uint32Array;
+  brep?: string;
+  step?: string;
+  brepTransform?: number[];
+  primitive?: CadModifierPrimitivePart;
+  hole: boolean;
+};
+
+export type CadModifierComponentMesh = {
+  owner: number;
+  positions: Float32Array;
+  normals: Float32Array;
+  indices: Uint32Array;
+  triangleCount: number;
+  brep?: string;
+  displayEdges: CadModifierDisplayEdge[];
+};
+
+export type CadModifierWorkerRequest =
+  | { type: "shell"; requestId: number; parts: CadModifierMeshPart[]; thickness: number; opening: "top" | "bottom" | "both" | "closed" }
+  | { type: "prepare"; requestId: number; parts: CadModifierMeshPart[]; sharpAngle: number; suppressTreatmentDetailEdges?: boolean }
+  | {
+      type: "preview";
+      requestId: number;
+      kind: CadModifierKind;
+      edgeIds: number[];
+      sessionId: number;
+      amount: number;
+      quality: CadModifierQuality;
+      chamferAngle: number;
+    }
+  | { type: "dispose"; requestId: number };
+
+export type CadModifierWorkerResponse =
+  | { type: "ready"; requestId: number; edges: CadModifierEdge[]; selectableEdgeIds: number[]; sourceType: string; usedMeshFallback?: boolean }
+  | {
+      type: "preview";
+      requestId: number;
+      positions: Float32Array;
+      normals: Float32Array;
+      indices: Uint32Array;
+      triangleCount: number;
+      brep?: string;
+      appliedAmount: number;
+      adjustedAmount: boolean;
+      appliedEdgeIds: number[];
+      skippedEdgeIds: number[];
+      exactSerializationFailed?: boolean;
+      displayEdges: CadModifierDisplayEdge[];
+      components?: CadModifierComponentMesh[];
+    }
+  | { type: "disposed"; requestId: number }
+  | { type: "error"; requestId: number; message: string; resetSession?: boolean; diagnostic?: CadModifierFaultDiagnostic };

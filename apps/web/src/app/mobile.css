@@ -1,0 +1,231 @@
+/* Canvas gestures are owned by the editor; normal page/panel scrolling and
+   browser zoom remain available everywhere outside the drawing surfaces. */
+.three-workplane-host,
+.sketch-plate {
+  touch-action: none;
+  -webkit-touch-callout: none;
+}
+
+.touch-controls {
+  position: absolute;
+  z-index: 18;
+  bottom: calc(54px + env(safe-area-inset-bottom, 0px));
+  left: 8px;
+  right: 8px;
+  width: fit-content;
+  max-width: calc(100% - 16px);
+  margin-inline: auto;
+  color: var(--foreground);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+
+.touch-controls-buttons { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; }
+.touch-controls button {
+  display: grid;
+  place-items: center;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--foreground);
+  background: var(--tile);
+  font-size: 12px;
+  font-weight: 700;
+  touch-action: manipulation;
+}
+.touch-controls button[aria-pressed="true"] { color: white; background: var(--active-tab); }
+.touch-controls button:disabled { opacity: 0.4; }
+.touch-controls p { max-width: 360px; margin: 0; padding: 10px 12px; font-size: 13px; line-height: 1.5; border-top: 1px solid var(--border); }
+
+.sketch-arc-help {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 18;
+  max-width: calc(100% - 112px);
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--foreground);
+  font-size: 12px;
+  text-align: center;
+}
+.sketch-arc-help button { margin-left: 8px; padding: 6px; color: var(--foreground); background: var(--tile); border-radius: 4px; }
+
+@media (any-pointer: coarse) {
+  /* iPads can be wider than the phone breakpoint. Reserve the touch tab height
+     at every touch viewport width, and use the visible browser height. */
+  .cadverix-editor {
+    --editor-toolbar-height: calc(100px + env(safe-area-inset-top, 0px));
+    --editor-toolbar-tools-height: 60px;
+    height: 100dvh;
+  }
+  .editor-body { height: calc(100dvh - var(--editor-toolbar-height)); bottom: auto; }
+  .workplane-stage, .sketch-workspace-stage { height: 100%; }
+  .toolbar-title-row { top: env(safe-area-inset-top, 0px); height: 40px; }
+  .toolbar-workspace-tabs { height: 40px; }
+  .toolbar-project-name-field, .toolbar-project-name-field input { height: 36px; }
+  .toolbar-section-label { height: 20px; padding: 2px 6px 0; font-size: 10px; }
+  .toolbar-section-tools { height: 40px; }
+  .toolbar-icon { height: 36px; width: 36px; }
+  .touch-controls { bottom: calc(54px + env(safe-area-inset-bottom, 0px)); }
+  .toolbar-icon,
+  .toolbar-workspace-tabs button,
+  .camera-controls button,
+  .shape-inspector button,
+  .workspace-modal button,
+  .scene-sidebar-header button,
+  .scene-shape-row > button,
+  .scene-sidebar-actions button,
+  .action-buttons button {
+    min-height: 36px;
+    min-width: 36px;
+    touch-action: manipulation;
+  }
+  .scene-shape-row > button { flex-basis: 44px; }
+  .scene-shape-delete { opacity: 1; }
+  .scene-shape-copy strong { font-size: 13px; }
+  .scene-shape-copy small { font-size: 11px; }
+  .scene-shape-row { min-height: 52px; }
+  /* Keep the overlay coordinates intact: scaling the whole handle would also
+     scale its translated position. Halve the mobile handle dimensions instead. */
+  .transform-handle,
+  .rotate-handle { min-width: 22px; min-height: 22px; touch-action: none; }
+  .rotate-handle { width: 22px; height: 22px; }
+  .rotate-handle-icon,
+  .rotate-handle-icon svg { width: 13px; height: 13px; }
+  .transform-handle.height-lift { translate: 0 -16px; }
+  .cadverix-editor input:not([type="range"]):not([type="checkbox"]):not([type="color"]),
+  .cadverix-editor select,
+  .cadverix-editor textarea { font-size: 16px; }
+  .toolbar-mode-content.geometry,
+  .toolbar-mode-content.sketch,
+  .toolbar-mode-content.sculpt { overflow-x: auto; overscroll-behavior-x: contain; }
+}
+
+@media (max-width: 1100px) {
+  .cadverix-editor { height: 100dvh; }
+  .editor-body { height: calc(100dvh - var(--editor-toolbar-height)); bottom: auto; }
+  .workplane-stage,
+  .sketch-workspace-stage { height: 100%; }
+  .workspace-modal-card { max-height: calc(100dvh - var(--editor-toolbar-height) - 24px); }
+}
+
+@media (max-width: 760px) {
+  .cadverix-editor { --editor-toolbar-height: calc(100px + env(safe-area-inset-top, 0px)); --editor-toolbar-tools-height: 60px; }
+  .toolbar-title-row { top: env(safe-area-inset-top, 0px); height: 40px; left: max(6px, env(safe-area-inset-left)); right: max(6px, env(safe-area-inset-right)); gap: 6px; }
+  .toolbar-workspace-tabs { flex-shrink: 0; }
+  .toolbar-workspace-tabs { height: 40px; }
+  .toolbar-workspace-tabs button { min-height: 36px; padding-inline: 6px; font-size: 11px; }
+  .toolbar-project-name { min-width: 0; flex: 1; }
+  .toolbar-project-name-field { min-width: 0; width: 100%; height: 36px; }
+  .toolbar-project-name-field input { width: 100%; min-width: 0; height: 36px; }
+  .toolbar-section-label { height: 20px; padding: 2px 6px 0; font-size: 10px; }
+  .toolbar-section-tools { height: 40px; }
+  .toolbar-icon { min-height: 36px; min-width: 36px; height: 36px; width: 36px; }
+  .toolbar-actions-section { flex-basis: auto; min-width: 0; }
+  .toolbar-section { flex-shrink: 0; }
+  .toolbar-mode-content { overscroll-behavior-x: contain; scroll-padding-inline: 8px; padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); }
+  .sculpt-toolbar-target { min-width: 130px; max-width: 180px; overflow: hidden; }
+  .sculpt-toolbar-field { min-width: 160px; }
+  .sculpt-toolbar-help { display: none; }
+  .scene-overview-sidebar.collapsed { width: 44px; min-width: 44px; }
+  .scene-sidebar-expand,
+  .shape-inspector-rail-expand { left: 0; width: 44px; min-width: 44px; }
+  .scene-overview-sidebar:not(.collapsed) { width: min(340px, calc(100vw - 44px)); min-width: 0; }
+  .shape-inspector,
+  .shape-inspector.sketch-revolve-inspector,
+  .shape-inspector.gear-inspector {
+    top: auto;
+    bottom: calc(102px + env(safe-area-inset-bottom, 0px));
+    right: 8px;
+    left: auto;
+    width: min(280px, calc(100% - 56px));
+    max-height: min(26dvh, 220px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-radius: 12px;
+  }
+  .shape-inspector-header { position: sticky; top: 0; z-index: 1; height: 38px; min-height: 38px; padding: 0 6px; flex-shrink: 0; background: var(--panel); }
+  .shape-inspector-header strong { font-size: 14px; padding-left: 6px; }
+  .inspector-header-actions { gap: 4px; }
+  .shape-state-card { margin: 6px; padding: 4px; gap: 4px; min-height: 44px; }
+  .shape-state-card > button { display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 8px; padding: 4px; }
+  .large-solid-swatch, .large-hole-swatch { width: 26px; height: 26px; min-width: 26px; }
+  .inspector-snap-dock { padding: 6px; }
+  .view-cube { left: 8px; top: 10px; transform: scale(0.72); transform-origin: top left; }
+  .camera-controls,
+  .sketch-camera-controls {
+    left: 8px;
+    top: 90px;
+    width: max-content;
+    max-width: calc(100% - 16px);
+    height: auto;
+    display: flex;
+    flex-direction: row;
+    overflow-x: auto;
+    transform: none;
+  }
+  .camera-controls button { flex-shrink: 0; width: 36px; height: 36px; min-width: 36px; }
+  .camera-controls.collapsed { width: 36px; }
+  .sketch-camera-controls { top: 44px; }
+  .ruler-tool-popover { position: fixed; top: calc(var(--editor-toolbar-height) + 140px); left: 54px; }
+  .grid-settings { right: 8px; bottom: max(8px, env(safe-area-inset-bottom)); max-width: calc(100% - 16px); }
+  .construction-plane-panel,
+  .sketch-operation-panel { top: 8px; right: 8px; width: min(340px, calc(100% - 16px)); max-height: calc(100% - 128px); overflow-y: auto; }
+  .sketch-revolve-preview { right: 8px; width: min(160px, 40vw); }
+  .shape-menu-dropdown { max-height: calc(100dvh - var(--editor-toolbar-height) - 16px); overflow-y: auto; }
+  .workspace-modal { padding-bottom: env(safe-area-inset-bottom); }
+}
+
+/* A rotated phone can be wider than the compact-screen breakpoint. Keep its
+   properties beside the work area rather than across the middle of it. */
+@media (any-pointer: coarse) and (orientation: landscape) and (max-height: 600px) {
+  .shape-inspector,
+  .shape-inspector.sketch-revolve-inspector,
+  .shape-inspector.gear-inspector {
+    top: 8px;
+    bottom: 8px;
+    right: max(8px, env(safe-area-inset-right));
+    width: min(260px, 32vw);
+    max-height: calc(100% - 16px);
+    overflow-y: auto;
+  }
+}
+
+/* The compact ribbon also needs compact artwork and action rows. Otherwise
+   desktop-sized icon children overflow 36px buttons and get clipped below it. */
+@media (any-pointer: coarse), (max-width: 760px) {
+  .toolbar-section-label { flex-shrink: 0; }
+  .toolbar-section-tools,
+  .toolbar-mode-content .action-buttons {
+    height: 40px;
+    min-height: 40px;
+    flex-shrink: 0;
+    padding-block: 0;
+  }
+  .toolbar-mode-content .shape-menu-trigger,
+  .toolbar-mode-content .action-buttons button {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+  }
+  .toolbar-mode-content .toolbar-icon > *,
+  .toolbar-mode-content .shape-menu-trigger > *,
+  .toolbar-mode-content .action-buttons button > * {
+    max-width: 32px;
+    max-height: 32px;
+  }
+}
+
+@media (max-width: 360px) {
+  .touch-controls { left: 4px; right: 4px; max-width: calc(100% - 8px); }
+  .touch-controls-buttons { gap: 0; padding: 1px; }
+  .touch-controls button { padding-inline: 4px; font-size: 11px; }
+}

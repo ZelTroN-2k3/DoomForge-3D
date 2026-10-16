@@ -1,0 +1,990 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
+import type { ConstructionPlanePose } from "@/lib/constructionPlanes";
+import { editorHistoryEntry } from "@/lib/editorHistory";
+import { placementWorkplaneFromSurface } from "@/lib/placementWorkplane";
+import { projectAssetFromBytes } from "@/lib/projectAssets";
+import * as projectAssets from "@/lib/projectAssets";
+import { canonicalizeShape } from "@/lib/workplaneShapes";
+import {
+  exportLylProject,
+  exportSkfProject,
+  importSkfProject,
+  inspectSkfProjectPackage,
+  LYL_SCHEMA_ID,
+  SKF_FORMAT_VERSION,
+  SKF_DRAWING_FORMAT_VERSION,
+  SKF_LIMITS,
+  SKF_SCHEMA_ID,
+  type SkfProjectDocumentV1,
+  type SkfProjectExportInput,
+} from "@/lib/skfProject";
+import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE } from "@/lib/workplaneSettings";
+import type { CadDisplayEdge, ShapeKind, WorkplaneNote, WorkplaneShape } from "@/types/sketchforge";
+
+function shape(kind: ShapeKind, id = `${kind}-1`, overrides: Partial<WorkplaneShape> = {}): WorkplaneShape {
+  return {
+    id,
+    name: kind,
+    kind,
+    color: "#12a4cc",
+    x: 1,
+    z: 2,
+    elevation: 3,
+    size: 20,
+    width: 20,
+    depth: 18,
+    height: 16,
+    rotation: 15,
+    rotationX: 5,
+    rotationZ: 10,
+    locked: false,
+    hidden: false,
+    ...overrides,
+  };
+}
+
+function displayEdges(count: number): CadDisplayEdge[] {
+  return Array.from({ length: count }, (_unused, index) => ({
+    points: [index, 0, 0, index, 5, 0, index, 5, 5],
+  }));
+}
+
+function input(shapes: WorkplaneShape[], overrides: Partial<SkfProjectExportInput> = {}): SkfProjectExportInput {
+  const history = [editorHistoryEntry(shapes, [])];
+  return {
+    projectId: "project-original",
+    projectName: "Round trip",
+    createdAt: 1_700_000_000_000,
+    modifiedAt: 1_700_000_100_000,
+    shapes,
+    history,
+    historyIndex: 0,
+    assets: [],
+    workspace: DEFAULT_WORKPLANE_WORKSPACE,
+    snapGrid: DEFAULT_SNAP_GRID,
+    placementElevation: 12.5,
+    ...overrides,
+  };
+}
+
+function packageDocument(bytes: Uint8Array) {
+  const files = unzipSync(bytes);
+  return { files, document: JSON.parse(strFromU8(files["project.json"])) as SkfProjectDocumentV1 };
+}
+
+function mutateProject(bytes: Uint8Array, mutate: (document: SkfProjectDocumentV1) => void) {
+  const files = unzipSync(bytes);
+  const document = JSON.parse(strFromU8(files["project.json"])) as SkfProjectDocumentV1;
+  mutate(document);
+  files["project.json"] = strToU8(JSON.stringify(document));
+  return zipSync(files);
+}
+
+describe("SketchForge .skf project packages", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("imports compatible Layerling packages and re-saves them as SKF", async () => {
+    const original = shape("mesh", "layerling-mesh", {
+      cadDisplayEdges: [{ points: [0, 0, 0, 1, 1, 1] }],
+      importedMesh: {
+        positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+        baseWidth: 1,
+        baseDepth: 1,
+        baseHeight: 1,
+        triangleCount: 1,
+        sourceFormat: "json",
+      },
+    });
+    const { files, document } = packageDocument(await exportSkfProject(input([original])));
+    document.schema = LYL_SCHEMA_ID;
+    for (const asset of document.assets) {
+      if (asset.kind !== "derived-mesh" && asset.kind !== "display-edges") continue;
+      const bytes = files[asset.path];
+      bytes.set(strToU8(asset.kind === "derived-mesh" ? "LYLMSH1\0" : "LYLEDG1\0"), 0);
+      asset.sha256 = await projectAssets.sha256Hex(bytes);
+    }
+    files["project.json"] = strToU8(JSON.stringify(document));
+
+    const restored = await importSkfProject(zipSync(files));
+    expect(restored.shapes[0].importedMesh?.positions).toEqual(original.importedMesh?.positions);
+    expect(restored.shapes[0].cadDisplayEdges).toEqual(original.cadDisplayEdges);
+
+    const saved = packageDocument(await exportSkfProject(input(restored.shapes, {
+      history: restored.history,
+      historyIndex: restored.historyIndex,
+    })));
+    expect(saved.document.schema).toBe(SKF_SCHEMA_ID);
+    for (const asset of saved.document.assets) {
+      if (asset.kind === "derived-mesh") expect(strFromU8(saved.files[asset.path].subarray(0, 8))).toBe("SKFMSH1\0");
+      if (asset.kind === "display-edges") expect(strFromU8(saved.files[asset.path].subarray(0, 8))).toBe("SKFEDG1\0");
+    }
+  });
+
+  it("exports genuine Layerling packages without cross-flavor cache contamination", async () => {
+    const original = shape("mesh", "portable-mesh", {
+      cadDisplayEdges: [{ points: [0, 0, 0, 1, 1, 1] }],
+      importedMesh: {
+        positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+        baseWidth: 1,
+        baseDepth: 1,
+        baseHeight: 1,
+        triangleCount: 1,
+        sourceFormat: "json",
+      },
+    });
+    const exportInput = input([original]);
+    const skf = packageDocument(await exportSkfProject(exportInput));
+    const lyl = packageDocument(await exportLylProject(exportInput));
+
+    expect(lyl.document).toMatchObject({ schema: LYL_SCHEMA_ID, formatVersion: 2, minimumReaderVersion: 2 });
+    const lylMesh = lyl.document.assets.find((asset) => asset.kind === "derived-mesh")!;
+    const lylEdges = lyl.document.assets.find((asset) => asset.kind === "display-edges")!;
+    expect(lylMesh.path).toMatch(/\.lylmesh$/);
+    expect(lylMesh.mediaType).toBe("application/vnd.layerling.mesh");
+    expect(strFromU8(lyl.files[lylMesh.path].subarray(0, 8))).toBe("LYLMSH1\0");
+    expect(lylEdges.path).toMatch(/\.lyledges$/);
+    expect(lylEdges.mediaType).toBe("application/vnd.layerling.edges");
+    expect(strFromU8(lyl.files[lylEdges.path].subarray(0, 8))).toBe("LYLEDG1\0");
+    expect((await importSkfProject(await exportLylProject(exportInput))).shapes[0].importedMesh?.positions).toEqual(original.importedMesh?.positions);
+
+    const firstSkfMesh = skf.document.assets.find((asset) => asset.kind === "derived-mesh")!;
+    expect(strFromU8(skf.files[firstSkfMesh.path].subarray(0, 8))).toBe("SKFMSH1\0");
+    const secondSkf = packageDocument(await exportSkfProject(exportInput));
+    const secondSkfMesh = secondSkf.document.assets.find((asset) => asset.kind === "derived-mesh")!;
+    expect(strFromU8(secondSkf.files[secondSkfMesh.path].subarray(0, 8))).toBe("SKFMSH1\0");
+  });
+
+  it("round-trips free and pinned notes through SKF and Layerling history states", async () => {
+    const original = shape("box", "noted-box");
+    const notes: WorkplaneNote[] = [
+      { id: "note-free", text: "Free note", x: 4, y: 0, z: 8 },
+      { id: "note-pinned", text: "Pinned note", x: 1, y: 5, z: 2, anchor: { shapeId: original.id, normalized: [0.5, 0.25, -0.5] }, collapsed: true },
+    ];
+    const history = [editorHistoryEntry([original], [], notes)];
+
+    for (const exporter of [exportSkfProject, exportLylProject]) {
+      const bytes = await exporter(input([original], { notes, history }));
+      const { document } = packageDocument(bytes);
+      expect(document.states[0].notes).toEqual(notes);
+      const restored = await importSkfProject(bytes);
+      expect(restored.notes).toEqual(notes);
+      expect(restored.history[0].notes).toEqual(notes);
+    }
+  });
+
+  it("preserves note-only history states and tolerates malformed Layerling notes", async () => {
+    const original = shape("box", "note-history-box");
+    const before: WorkplaneNote[] = [{ id: "note-1", text: "Before", x: 0, y: 0, z: 0 }];
+    const after: WorkplaneNote[] = [{ ...before[0], text: "After" }];
+    const history = [editorHistoryEntry([original], [], before), editorHistoryEntry([original], [], after)];
+    const bytes = await exportLylProject(input([original], { notes: after, history, historyIndex: 1 }));
+    expect(packageDocument(bytes).document.states).toHaveLength(2);
+
+    const malformed = mutateProject(bytes, (document) => {
+      (document.states[1] as { notes?: unknown }).notes = [after[0], 42, null];
+    });
+    const restored = await importSkfProject(malformed);
+    expect(restored.notes).toEqual(after);
+    expect(restored.history).toHaveLength(2);
+  });
+
+  it("rejects Cadverix-only project data instead of dropping it from Layerling exports", async () => {
+    await expect(exportLylProject(input([shape("constructionPlane")]))).rejects.toThrow(/does not support.*constructionPlane/);
+    await expect(exportLylProject(input([shape("cylinder", "threaded", { threadMode: "external" })]))).rejects.toThrow(/different thread model/);
+    await expect(exportLylProject(input([shape("box", "sculpted", { sculpted: true })]))).rejects.toThrow(/reversible feature state/);
+    await expect(exportLylProject(input([shape("sketch", "constrained", {
+      sketchProfile: {
+        points: [{ id: "a", x: 0, z: 0 }, { id: "b", x: 1, z: 0 }],
+        segments: [{ id: "line", startId: "a", endId: "b" }],
+        constraints: [{ id: "fixed", kind: "fixed", pointId: "a", x: 0, z: 0 }],
+      },
+    })]))).rejects.toThrow(/extended sketch data/);
+    await expect(exportLylProject(input([shape("box")], {
+      workspace: { ...DEFAULT_WORKPLANE_WORKSPACE, drawing: {} as never },
+    }))).rejects.toThrow(/does not support Cadverix drawing sheets/);
+  });
+
+  it("rejects Layerling features that SketchForge cannot preserve", async () => {
+    const bytes = await exportSkfProject(input([shape("box", "twisted")]));
+    await expect(importSkfProject(mutateProject(bytes, (document) => {
+      document.schema = LYL_SCHEMA_ID;
+      document.states[0].nodes[0].definition.extrudeTwist = 45;
+    }))).rejects.toThrow(/unsupported feature 'extrudeTwist'/);
+
+    await expect(importSkfProject(mutateProject(bytes, (document) => {
+      document.schema = LYL_SCHEMA_ID;
+      document.states[0].nodes[0].definition.kind = "thread";
+    }))).rejects.toThrow(/unknown shape type 'thread'/);
+  });
+
+  it("encodes shared geometry once across a long transform history and subsequent saves", async () => {
+    const points = Array.from({ length: 30_000 }, (_, index) => Math.sin(index));
+    const resource = shape("mesh", "shared-geometry", {
+      cadDisplayEdges: [{ points }],
+      cadDisplayEdgesVersion: 2,
+      cadBrep: "Shared regression BREP ".repeat(10_000),
+      importedMesh: { positions: points, baseWidth: 2, baseDepth: 2, baseHeight: 2, triangleCount: points.length / 9, sourceFormat: "json" },
+    });
+    const history = Array.from({ length: 40 }, (_, x) => editorHistoryEntry([{ ...resource, x }], [resource.id]));
+    const saveInput = input(history[20].shapes, { history, historyIndex: 20 });
+    const hash = vi.spyOn(projectAssets, "sha256Hex");
+    const bytes = await exportSkfProject(saveInput);
+    expect(hash).toHaveBeenCalledTimes(3);
+    hash.mockClear();
+    await exportSkfProject(saveInput);
+    expect(hash).not.toHaveBeenCalled();
+
+    const { files, document } = packageDocument(bytes);
+    expect(document.assets.map((asset) => asset.kind).sort()).toEqual(["brep", "derived-mesh", "display-edges"]);
+    expect(files["project.json"].length).toBeLessThan(100_000);
+    expect(document.states.every((state) => state.nodes.every((node) => node.definition.cadDisplayEdges === undefined))).toBe(true);
+    const restored = await importSkfProject(bytes);
+    expect(restored.historyIndex).toBe(20);
+    expect(restored.history.map((entry) => entry.shapes[0].x)).toEqual(history.map((entry) => entry.shapes[0].x));
+    for (const entry of restored.history) {
+      expect(entry.shapes[0].cadDisplayEdges).toBe(restored.shapes[0].cadDisplayEdges);
+      expect(entry.shapes[0].importedMesh).toBe(restored.shapes[0].importedMesh);
+    }
+    expect(restored.shapes[0].cadDisplayEdges).toEqual(resource.cadDisplayEdges);
+    expect(restored.shapes[0].cadBrep).toBe(resource.cadBrep);
+    hash.mockClear();
+    await exportSkfProject(input(restored.shapes, { history: restored.history, historyIndex: restored.historyIndex }));
+    expect(hash).toHaveBeenCalledTimes(2); // One mesh and one edge resource, independent of state count.
+  });
+
+  it("reads V1 inline display edges and interns them before re-saving", async () => {
+    const original = shape("box", "legacy-edges", { cadDisplayEdges: [{ points: [0, 0, 0, 1, 2, 3] }], cadDisplayEdgesVersion: 2 });
+    const moved = { ...original, x: 42 };
+    const history = [editorHistoryEntry([original], []), editorHistoryEntry([moved], [moved.id])];
+    const packaged = await exportSkfProject(input([moved], { history, historyIndex: 1 }));
+    const legacy = mutateProject(packaged, (document) => {
+      document.formatVersion = 1;
+      document.minimumReaderVersion = 1;
+      document.assets = document.assets.filter((asset) => asset.kind !== "display-edges");
+      for (const state of document.states) for (const node of state.nodes) {
+        node.cadDisplayEdgesAssetId = undefined;
+        node.definition.cadDisplayEdges = original.cadDisplayEdges;
+      }
+    });
+    const restored = await importSkfProject(legacy);
+    expect(restored.history).toHaveLength(2);
+    expect(restored.history[0].shapes[0].cadDisplayEdges).toBe(restored.shapes[0].cadDisplayEdges);
+    const saved = packageDocument(await exportSkfProject(input(restored.shapes, { history: restored.history, historyIndex: 1 })));
+    expect(saved.document.assets.filter((asset) => asset.kind === "display-edges")).toHaveLength(1);
+  });
+
+  it("keeps replaced edge and mesh arrays distinct even when their lengths match", async () => {
+    const original = shape("mesh", "changed-resources", {
+      cadDisplayEdges: [{ points: [0, 0, 0, 1, 1, 1] }],
+      importedMesh: { positions: [0, 0, 0, 1, 0, 0, 0, 1, 0], baseWidth: 1, baseDepth: 1, baseHeight: 1, triangleCount: 1, sourceFormat: "json" },
+    });
+    await exportSkfProject(input([original]));
+    const changed = { ...original, cadDisplayEdges: [{ points: [0, 0, 0, 2, 2, 2] }], importedMesh: { ...original.importedMesh!, normals: original.importedMesh!.positions } };
+    const history = [editorHistoryEntry([original], []), editorHistoryEntry([changed], [])];
+    const restored = await importSkfProject(await exportSkfProject(input([changed], { history, historyIndex: 1 })));
+    expect(restored.history[0].shapes[0].cadDisplayEdges).toEqual(original.cadDisplayEdges);
+    expect(restored.shapes[0].cadDisplayEdges).toEqual(changed.cadDisplayEdges);
+    expect(restored.history[0].shapes[0].importedMesh?.normals).toBeUndefined();
+    expect(restored.shapes[0].importedMesh?.normals).toEqual(changed.importedMesh.normals);
+  });
+
+  it("rejects missing and corrupt display-edge resources", async () => {
+    const bytes = await exportSkfProject(input([shape("box", "bad-edges", { cadDisplayEdges: [{ points: [0, 0, 0] }] })]));
+    await expect(importSkfProject(mutateProject(bytes, (document) => {
+      document.states[0].nodes[0].cadDisplayEdgesAssetId = "missing";
+    }))).rejects.toThrow(/display[- ]edge asset/);
+    const { files, document } = packageDocument(bytes);
+    const edge = document.assets.find((asset) => asset.kind === "display-edges")!;
+    edge.mediaType = "application/vnd.sketchforge.display-edges+json";
+    files[edge.path] = strToU8('[{"points":["invalid",0,0]}]');
+    edge.byteLength = files[edge.path].length;
+    edge.sha256 = await projectAssets.sha256Hex(files[edge.path]);
+    files["project.json"] = strToU8(JSON.stringify(document));
+    await expect(importSkfProject(zipSync(files))).rejects.toThrow(/display-edge coordinates/);
+  });
+
+  it("reads this fork's JSON format-2 edge assets and upgrades them to shared binary assets", async () => {
+    const original = shape("box", "json-v2", { cadDisplayEdges: displayEdges(3), cadDisplayEdgesVersion: 2 });
+    const moved = { ...original, x: 25 };
+    const history = [editorHistoryEntry([original], []), editorHistoryEntry([moved], [moved.id])];
+    const { files, document } = packageDocument(await exportSkfProject(input([moved], { history, historyIndex: 1 })));
+    const edge = document.assets.find((asset) => asset.kind === "display-edges")!;
+    delete files[edge.path];
+    edge.path = edge.path.replace(/\.skfedges$/, ".json");
+    edge.mediaType = "application/vnd.sketchforge.display-edges+json";
+    files[edge.path] = strToU8(JSON.stringify(original.cadDisplayEdges));
+    edge.byteLength = files[edge.path].length;
+    edge.sha256 = await projectAssets.sha256Hex(files[edge.path]);
+    files["project.json"] = strToU8(JSON.stringify(document));
+    const restored = await importSkfProject(zipSync(files));
+    expect(restored.shapes[0].cadDisplayEdges).toEqual(original.cadDisplayEdges);
+    expect(restored.history[0].shapes[0].cadDisplayEdges).toBe(restored.history[1].shapes[0].cadDisplayEdges);
+    const saved = packageDocument(await exportSkfProject(input(restored.shapes, { history: restored.history, historyIndex: 1 })));
+    const binary = saved.document.assets.filter((asset) => asset.kind === "display-edges");
+    expect(binary).toHaveLength(1);
+    expect(binary[0].path).toMatch(/\.skfedges$/);
+    expect(strFromU8(saved.files[binary[0].path].subarray(0, 8))).toBe("SKFEDG1\0");
+  });
+
+  it("rejects malformed binary edge coordinates", async () => {
+    const original = shape("box", "binary-edges", { cadDisplayEdges: displayEdges(1) });
+    const { files, document } = packageDocument(await exportSkfProject(input([original])));
+    const edge = document.assets.find((asset) => asset.kind === "display-edges")!;
+    const bytes = files[edge.path];
+    new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setFloat64(20, Number.NaN, true);
+    edge.sha256 = await projectAssets.sha256Hex(bytes);
+    files["project.json"] = strToU8(JSON.stringify(document));
+    await expect(importSkfProject(zipSync(files))).rejects.toThrow(/display-edge coordinates/);
+  });
+
+  it("round-trips every supported native shape kind and editable properties", async () => {
+    const nativeKinds: ShapeKind[] = [
+      "box", "cylinder", "sphere", "sketch", "scribble", "cone", "pyramid", "roof", "text", "roundRoof",
+      "halfSphere", "torus", "tube", "gear", "screw", "washer", "nut", "ring", "wedge", "polygon", "icosahedron",
+    ];
+    const shapes = nativeKinds.map((kind, index) => shape(kind, `${kind}-${index}`, {
+      hole: index === 2,
+      locked: index === 3,
+      hidden: index === 4,
+      mirrorX: index === 5,
+      sides: index + 3,
+      teeth: kind === "gear" ? 18 : undefined,
+      toothSize: kind === "gear" ? 3.25 : undefined,
+      toothWidth: kind === "gear" ? 2.75 : undefined,
+      centerHoleSize: kind === "gear" ? 7.5 : undefined,
+      gearType: kind === "gear" ? "helical" : undefined,
+      helixAngle: kind === "gear" ? -30 : undefined,
+      helixQuality: kind === "gear" ? 24 : undefined,
+      threadMode: kind === "screw" ? "external" : kind === "nut" ? "internal" : undefined,
+      threadFamily: kind === "screw" || kind === "nut" ? "unf" : undefined,
+      threadPreset: kind === "screw" || kind === "nut" ? "1/4-28-unf" : undefined,
+      threadPitch: kind === "screw" || kind === "nut" ? 25.4 / 28 : undefined,
+      threadDepth: kind === "screw" || kind === "nut" ? 0.3 : undefined,
+      threadHandedness: kind === "screw" || kind === "nut" ? "left" : undefined,
+      threadQuality: kind === "screw" || kind === "nut" || kind === "washer" ? 48 : undefined,
+      boreDiameter: kind === "nut" || kind === "washer" ? 6.35 : undefined,
+      shaftDiameter: kind === "screw" ? 6.35 : undefined,
+      headHeight: kind === "screw" ? 4.5 : undefined,
+      text: kind === "text" ? "Editable" : undefined,
+      sketchProfile: kind === "sketch" ? {
+        points: [
+          { id: "p1", x: 0, z: 0 },
+          { id: "p2", x: 10, z: 0 },
+          { id: "p3", x: 10, z: 10 },
+        ],
+        segments: [
+          { id: "s1", startId: "p1", endId: "p2", kind: "line" },
+          { id: "s2", startId: "p2", endId: "p3", kind: "bezier" },
+          { id: "s3", startId: "p3", endId: "p1", kind: "line" },
+        ],
+        constraints: [
+          { id: "fixed-p1", kind: "fixed", pointId: "p1", x: 0, z: 0 },
+          { id: "horizontal-s1", kind: "horizontal", segmentId: "s1" },
+        ],
+        dimensions: [{ id: "length-s1", kind: "length", segmentId: "s1", value: 10 }],
+        texts: [{ id: "label-1", text: "10 mm", x: 5, z: -2, fontSize: 4 }],
+      } : undefined,
+    }));
+
+    const customWorkspace = { ...DEFAULT_WORKPLANE_WORKSPACE, gridColor: "#a34fd1" };
+    const exported = await exportSkfProject(input(shapes, { workspace: customWorkspace }));
+    const { document } = packageDocument(exported);
+    const summary = await inspectSkfProjectPackage(exported);
+    const restored = await importSkfProject(exported);
+
+    expect(restored.projectName).toBe("Round trip");
+    expect(restored.sourceProjectId).toBe("project-original");
+    expect(JSON.stringify(restored.shapes)).toBe(JSON.stringify(shapes.map(canonicalizeShape)));
+    expect(restored.workspace).toEqual(customWorkspace);
+    expect(restored.snapGrid).toBe(DEFAULT_SNAP_GRID);
+    expect(restored.placementElevation).toBe(12.5);
+    expect(summary).toEqual({
+      projectName: "Round trip",
+      createdAt: 1_700_000_000_000,
+      modifiedAt: 1_700_000_100_000,
+      formatVersion: SKF_FORMAT_VERSION,
+    });
+    expect(document.assets.filter((entry) => entry.kind === "derived-mesh")).toHaveLength(0);
+  });
+
+  it("round-trips construction planes and sketch plane attachments", async () => {
+    const pose: ConstructionPlanePose = { origin: [12, 4, -3], quaternion: [0, 0, 0, 1] };
+    const plane = shape("constructionPlane", "plane-1", {
+      name: "Offset XZ plane",
+      constructionPlane: { kind: "principal", principal: "xz", offset: 4, angle: 15, flipped: true, pose },
+      locked: true,
+      height: 0.1,
+    });
+    const anglePlane = shape("constructionPlane", "angle-plane-1", {
+      constructionPlane: { kind: "angle", referencePlaneId: plane.id, angle: 35, offset: 2, flipped: false, pose },
+      locked: true,
+      height: 0.1,
+    });
+    const midplane = shape("constructionPlane", "midplane-1", {
+      constructionPlane: { kind: "midplane", firstPlaneId: "construction-plane-base", secondPlaneId: plane.id, offset: -1, pose },
+      locked: true,
+      height: 0.1,
+    });
+    const sketch = shape("mesh", "sketch-on-plane", {
+      sketchProfile: {
+        points: [{ id: "p1", x: 0, z: 0, projectionId: "projection-1" }, { id: "p2", x: 10, z: 0, projectionId: "projection-1" }, { id: "p3", x: 0, z: 10 }],
+        segments: [
+          { id: "s1", startId: "p1", endId: "p2", kind: "line", projectionId: "projection-1" },
+          { id: "s2", startId: "p2", endId: "p3", kind: "line" },
+          { id: "s3", startId: "p3", endId: "p1", kind: "line" },
+        ],
+        dimensions: [{ id: "distance-1", kind: "distance", start: { kind: "point", pointId: "p1" }, end: { kind: "midpoint", segmentId: "s2" } }],
+        projections: [{ id: "projection-1", sourceShapeId: "source-shape", sourceName: "Source shape", sourceKind: "intersection" }],
+      },
+      sketchFeature: { kind: "extrusion" },
+      sketchPlane: { constructionPlaneId: plane.id, pose, localCenter: [5, 8, 5] },
+    });
+
+    const restored = await importSkfProject(await exportSkfProject(input([plane, anglePlane, midplane, sketch])));
+
+    expect(restored.shapes).toEqual([canonicalizeShape(plane), canonicalizeShape(anglePlane), canonicalizeShape(midplane), canonicalizeShape(sketch)]);
+    expect(restored.shapes[0].constructionPlane?.kind).toBe("principal");
+    expect(restored.shapes[1].constructionPlane?.kind).toBe("angle");
+    expect(restored.shapes[2].constructionPlane?.kind).toBe("midplane");
+    expect(restored.shapes[3].sketchPlane?.constructionPlaneId).toBe("plane-1");
+  });
+
+  it("validates angle and midplane construction plane fields", async () => {
+    const pose: ConstructionPlanePose = { origin: [0, 0, 0], quaternion: [0, 0, 0, 1] };
+    const anglePlane = shape("constructionPlane", "angle-plane", {
+      constructionPlane: { kind: "angle", referencePlaneId: "construction-plane-base", angle: 30, pose },
+    });
+    const midplane = shape("constructionPlane", "midplane", {
+      constructionPlane: { kind: "midplane", firstPlaneId: "construction-plane-base", secondPlaneId: anglePlane.id, offset: 0, pose },
+    });
+    const exported = await exportSkfProject(input([anglePlane, midplane]));
+    const invalidAngle = mutateProject(exported, (document) => {
+      const node = document.states.flatMap((state) => state.nodes).find((entry) => entry.objectId === anglePlane.id);
+      if (node) (node.definition.constructionPlane as { angle: unknown }).angle = "invalid";
+    });
+    const invalidMidplane = mutateProject(exported, (document) => {
+      const node = document.states.flatMap((state) => state.nodes).find((entry) => entry.objectId === midplane.id);
+      if (node) (node.definition.constructionPlane as { firstPlaneId: unknown }).firstPlaneId = "";
+    });
+
+    await expect(importSkfProject(invalidAngle)).rejects.toThrow("constructionPlane.angle must be a finite number");
+    await expect(importSkfProject(invalidMidplane)).rejects.toThrow("constructionPlane.firstPlaneId must be a non-empty string");
+  });
+
+  it("preserves an oriented placement workplane", async () => {
+    const placementWorkplane = placementWorkplaneFromSurface(
+      { x: 12, y: 8, z: -3 },
+      { x: 1, y: 0, z: 0 },
+      { x: 0, y: 1, z: 0 },
+    );
+    const sketchPlacementWorkplane = placementWorkplaneFromSurface(
+      { x: -4, y: 6, z: 9 },
+      { x: 0, y: 0, z: -1 },
+      { x: 1, y: 0, z: 0 },
+    );
+    const exported = await exportSkfProject(input([shape("box")], {
+      placementElevation: 0,
+      placementWorkplane,
+      sketchPlacementWorkplane,
+    }));
+    const restored = await importSkfProject(exported);
+
+    expect(restored.placementWorkplane).toEqual(placementWorkplane);
+    expect(restored.sketchPlacementWorkplane).toEqual(sketchPlacementWorkplane);
+  });
+
+  it("preserves editable revolve sketch settings and generated geometry", async () => {
+    const revolve = shape("mesh", "revolve-sketch", {
+      name: "Sketch revolve",
+      sketchOperation: "revolve",
+      sketchRevolve: { startAngle: 25, sweepAngle: -220, sides: 48, quality: 8 },
+      sketchProfile: {
+        points: [{ id: "p1", x: -4, z: 0 }, { id: "p2", x: -8, z: 0 }, { id: "p3", x: -8, z: 16 }, { id: "p4", x: -4, z: 16 }],
+        segments: [
+          { id: "s1", startId: "p1", endId: "p2", kind: "line" },
+          { id: "s2", startId: "p2", endId: "p3", kind: "line" },
+          { id: "s3", startId: "p3", endId: "p4", kind: "line" },
+          { id: "s4", startId: "p4", endId: "p1", kind: "line" },
+        ],
+      },
+      importedMesh: {
+        positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+        baseWidth: 16,
+        baseDepth: 16,
+        baseHeight: 16,
+        triangleCount: 1,
+        sourceFormat: "json",
+      },
+    });
+    const restored = await importSkfProject(await exportSkfProject(input([revolve])));
+    expect(restored.shapes[0].sketchOperation).toBe("revolve");
+    expect(restored.shapes[0].sketchRevolve).toEqual(revolve.sketchRevolve);
+    expect(restored.shapes[0].sketchProfile).toEqual(revolve.sketchProfile);
+    expect(restored.shapes[0].importedMesh?.positions).toEqual(revolve.importedMesh?.positions);
+  });
+
+  it("preserves nested groups, holes, intersection metadata, edge history, B-Rep, and undo/redo", async () => {
+    const cadDisplayEdges = [{ points: [0, 0, 0, 1, 2, 3] }];
+    const solid = shape("box", "solid", { x: 0, cadDisplayEdges });
+    const hole = shape("cylinder", "hole", { hole: true, color: "#b8c2cc", x: 4 });
+    const group = shape("mesh", "group", {
+      name: "Intersection",
+      groupOperation: "intersection",
+      groupedBaseWidth: 30,
+      groupedBaseDepth: 30,
+      groupedBaseHeight: 20,
+      groupedShapes: [solid, hole],
+      importedMesh: {
+        positions: [0, 0, 0, 2, 0, 0, 0, 2, 0],
+        normals: [0, 0, 1, 0, 0, 1, 0, 0, 1],
+        baseWidth: 2,
+        baseDepth: 1,
+        baseHeight: 2,
+        triangleCount: 1,
+        sourceFormat: "json",
+      },
+      cadBrep: "BREP exact payload",
+      cadDisplayEdges,
+      edgeTreatments: [{ kind: "fillet", amount: 1.25, edgeCount: 3 }],
+      edgeTreatmentHistory: [{
+        id: "edge-history-1",
+        createdAt: 1_700_000_050_000,
+        feature: { kind: "fillet", amount: 1.25, edgeCount: 3 },
+        before: shape("box", "group", { width: 30, depth: 30, height: 20, cadDisplayEdges }),
+      }],
+    });
+    const before = editorHistoryEntry([solid, hole], ["solid", "hole"]);
+    const after = editorHistoryEntry([group], ["group"]);
+    const exported = await exportSkfProject(input([group], { history: [before, after], historyIndex: 1 }));
+    const { document } = packageDocument(exported);
+
+    expect(document.groups[0].operation).toBe("boolean-intersection");
+    expect(document.features.some((feature) => feature.type === "fillet")).toBe(true);
+    expect(document.exactCad).toHaveLength(1);
+    expect(document.assets.filter((asset) => asset.kind === "display-edges")).toHaveLength(1);
+
+    const restored = await importSkfProject(exported);
+    expect(restored.history).toHaveLength(2);
+    expect(restored.historyIndex).toBe(1);
+    expect(restored.shapes[0].groupedShapes).toEqual([solid, hole]);
+    expect(restored.shapes[0].groupOperation).toBe("intersection");
+    expect(restored.shapes[0].cadBrep).toBe("BREP exact payload");
+    expect(restored.shapes[0].edgeTreatmentHistory?.[0].before.kind).toBe("box");
+  });
+
+  it("round-trips suppressed feature state and pre-sculpt source geometry", async () => {
+    const source = shape("box", "sculpt-source", { width: 12, depth: 14, height: 16 });
+    const sculpted = shape("mesh", "sculpted", {
+      sculpted: true,
+      sculptSource: source,
+      disabledFeatures: ["sculpt"],
+      importedMesh: {
+        positions: [0, 0, 0, 2, 0, 0, 0, 2, 0],
+        baseWidth: 2,
+        baseDepth: 1,
+        baseHeight: 2,
+        triangleCount: 1,
+        sourceFormat: "json",
+      },
+    });
+
+    const restored = await importSkfProject(await exportSkfProject(input([sculpted])));
+    expect(restored.shapes[0].disabledFeatures).toEqual(["sculpt"]);
+    expect(restored.shapes[0].sculptSource?.kind).toBe("box");
+    expect(restored.shapes[0].sculptSource?.width).toBe(12);
+  });
+
+  it("repairs duplicate descendant IDs from legacy shallow-copied groups during export", async () => {
+    const roof = shape("roundRoof", "round-roof-shared-child");
+    const box = shape("box", "box-shared-child");
+    const original = shape("mesh", "group-original", { groupedShapes: [roof, box] });
+    const duplicate = { ...original, id: "group-copy", x: 30 };
+    const history = [
+      editorHistoryEntry([original], [original.id]),
+      editorHistoryEntry([original, duplicate], [duplicate.id]),
+    ];
+
+    const exported = await exportSkfProject(input([original, duplicate], { history, historyIndex: 1 }));
+    const restored = await importSkfProject(exported);
+    const collectIds = (entry: WorkplaneShape): string[] => [
+      entry.id,
+      ...(entry.groupedShapes ?? []).flatMap(collectIds),
+    ];
+    const restoredIds = restored.shapes.flatMap(collectIds);
+
+    expect(original.groupedShapes?.[0].id).toBe(duplicate.groupedShapes?.[0].id);
+    expect(restored.shapes.map((entry) => entry.id)).toEqual(["group-original", "group-copy"]);
+    expect(new Set(restoredIds).size).toBe(restoredIds.length);
+    expect(restored.history).toHaveLength(2);
+    expect(restored.historyIndex).toBe(1);
+  });
+
+  it("preserves every silently packaged undo and redo action", async () => {
+    const created = shape("box", "history-box", { width: 20, depth: 20, x: 0 });
+    const resized = { ...created, width: 30 };
+    const moved = { ...resized, x: 18 };
+    const history = [
+      editorHistoryEntry([created], ["history-box"]),
+      editorHistoryEntry([resized], ["history-box"]),
+      editorHistoryEntry([moved], ["history-box"]),
+    ];
+
+    const restored = await importSkfProject(await exportSkfProject(input([resized], {
+      history,
+      historyIndex: 1,
+      compressionLevel: 1,
+    })));
+
+    expect(restored.history).toHaveLength(3);
+    expect(restored.historyIndex).toBe(1);
+    expect(restored.history[0].shapes[0]).toMatchObject({ width: 20, x: 0 });
+    expect(restored.history[1].shapes[0]).toMatchObject({ width: 30, x: 0 });
+    expect(restored.history[2].shapes[0]).toMatchObject({ width: 30, x: 18 });
+    expect(restored.shapes[0]).toMatchObject({ width: 30, x: 0 });
+  });
+
+  it("stores one original source asset for repeated imported instances and regenerates it once", async () => {
+    const sourceBytes = strToU8("solid source");
+    const asset = await projectAssetFromBytes("shared.stl", "stl", sourceBytes);
+    const importedMesh: NonNullable<WorkplaneShape["importedMesh"]> = {
+      positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      baseWidth: 1,
+      baseDepth: 1,
+      baseHeight: 1,
+      triangleCount: 1,
+      sourceFormat: "stl",
+      assetId: asset.id,
+    };
+    const instances = [
+      shape("mesh", "instance-a", { importedMesh, x: 0 }),
+      shape("mesh", "instance-b", { importedMesh, x: 30 }),
+    ];
+    const exported = await exportSkfProject(input(instances, { assets: [asset] }));
+    const { document } = packageDocument(exported);
+    let importCalls = 0;
+    const restored = await importSkfProject(exported, {
+      sourceImporter: async () => {
+        importCalls += 1;
+        return { ...importedMesh, assetId: undefined };
+      },
+    });
+
+    expect(document.assets.filter((entry) => entry.kind === "source")).toHaveLength(1);
+    expect(document.assets.filter((entry) => entry.kind === "derived-mesh")).toHaveLength(0);
+    expect(restored.assets).toHaveLength(1);
+    expect(restored.shapes[0].importedMesh?.assetId).toBe(restored.shapes[1].importedMesh?.assetId);
+    expect(importCalls).toBe(1);
+  });
+
+  it("exports and imports source-backed projects without Web Crypto", async () => {
+    const sourceBytes = strToU8("solid http source");
+    const asset = await projectAssetFromBytes("http.stl", "stl", sourceBytes);
+    const importedMesh: NonNullable<WorkplaneShape["importedMesh"]> = {
+      positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      baseWidth: 1,
+      baseDepth: 1,
+      baseHeight: 1,
+      triangleCount: 1,
+      sourceFormat: "stl",
+      assetId: asset.id,
+    };
+    vi.stubGlobal("crypto", {});
+
+    const exported = await exportSkfProject(input([shape("mesh", "http-object", { importedMesh })], { assets: [asset] }));
+    const restored = await importSkfProject(exported, {
+      sourceImporter: async () => ({ ...importedMesh, assetId: undefined }),
+    });
+
+    expect(packageDocument(exported).document.assets[0].sha256).toBe(asset.sha256);
+    expect(restored.assets[0].sha256).toBe(asset.sha256);
+    expect(restored.shapes[0].importedMesh?.assetId).toBe(restored.assets[0].id);
+  });
+
+  it("shares decoded derived-mesh arrays across restored history states", async () => {
+    const importedMesh: NonNullable<WorkplaneShape["importedMesh"]> = {
+      positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      normals: [0, 0, 1, 0, 0, 1, 0, 0, 1],
+      baseWidth: 1,
+      baseDepth: 1,
+      baseHeight: 1,
+      triangleCount: 1,
+      sourceFormat: "json",
+    };
+    const before = shape("mesh", "derived-history", { importedMesh, x: 0 });
+    const after = { ...before, x: 20 };
+    const history = [editorHistoryEntry([before], []), editorHistoryEntry([after], [after.id])];
+
+    const restored = await importSkfProject(await exportSkfProject(input([after], { history, historyIndex: 1 })));
+    const firstPositions = restored.history[0].shapes[0].importedMesh?.positions;
+    const secondPositions = restored.history[1].shapes[0].importedMesh?.positions;
+
+    expect(firstPositions).toBe(secondPositions);
+    expect(restored.shapes[0].importedMesh?.positions).toBe(secondPositions);
+  });
+
+  it.each(["3mf", "svg", "step"] as const)("stores and restores original %s sources", async (sourceFormat) => {
+    const asset = await projectAssetFromBytes(`source.${sourceFormat}`, sourceFormat, strToU8(`${sourceFormat} source`));
+    const importedMesh: NonNullable<WorkplaneShape["importedMesh"]> = {
+      positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      baseWidth: 1,
+      baseDepth: 1,
+      baseHeight: 1,
+      triangleCount: 1,
+      sourceFormat,
+      assetId: asset.id,
+      ...(sourceFormat === "step" ? { brepStep: "exact STEP" } : {}),
+    };
+    const exported = await exportSkfProject(input([shape("mesh", `${sourceFormat}-object`, { importedMesh })], { assets: [asset] }));
+    const { document } = packageDocument(exported);
+    const restored = await importSkfProject(exported, { sourceImporter: async () => importedMesh });
+
+    expect(document.assets.filter((entry) => entry.kind === "source")).toHaveLength(1);
+    expect(document.assets.filter((entry) => entry.kind === "derived-mesh")).toHaveLength(0);
+    expect(restored.assets[0].sourceFormat).toBe(sourceFormat);
+    expect(restored.shapes[0].importedMesh?.sourceFormat).toBe(sourceFormat);
+    if (sourceFormat === "step") expect(document.exactCad[0].importedStepAssetId).toBeTruthy();
+  });
+
+  it("deduplicates and restores reference images stored in sketches and image plates", async () => {
+    const dataUrl = "data:image/png;base64,AAECAwQ=";
+    const imageShape = shape("sketch", "sketch-images", {
+      imagePlate: { dataUrl, mimeType: "image/png", pixelWidth: 2, pixelHeight: 2 },
+      sketchProfile: {
+        points: [
+          { id: "p1", x: 0, z: 0 },
+          { id: "p2", x: 10, z: 0 },
+          { id: "p3", x: 0, z: 10 },
+        ],
+        segments: [
+          { id: "s1", startId: "p1", endId: "p2" },
+          { id: "s2", startId: "p2", endId: "p3" },
+          { id: "s3", startId: "p3", endId: "p1" },
+        ],
+        images: [{
+          id: "image-1",
+          name: "Reference",
+          dataUrl,
+          mimeType: "image/png",
+          pixelWidth: 2,
+          pixelHeight: 2,
+          x: 0,
+          z: 0,
+          width: 10,
+          depth: 10,
+          lockAspect: true,
+          locked: true,
+        }],
+      },
+    });
+    const exported = await exportSkfProject(input([imageShape]));
+    const { document } = packageDocument(exported);
+    const restored = await importSkfProject(exported);
+
+    expect(document.assets.filter((entry) => entry.kind === "image")).toHaveLength(1);
+    expect(restored.shapes[0].imagePlate?.dataUrl).toBe(dataUrl);
+    expect(restored.shapes[0].sketchProfile?.images?.[0].dataUrl).toBe(dataUrl);
+    expect(restored.shapes[0].sketchProfile?.images?.[0].locked).toBe(true);
+  });
+
+  it("deduplicates derived geometry when legacy imported objects share one mesh", async () => {
+    const mesh = {
+      positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      baseWidth: 1,
+      baseDepth: 1,
+      baseHeight: 1,
+      triangleCount: 1,
+      sourceFormat: "json" as const,
+    };
+    const exported = await exportSkfProject(input([
+      shape("mesh", "legacy-a", { importedMesh: mesh }),
+      shape("mesh", "legacy-b", { importedMesh: mesh }),
+    ]));
+    const { document } = packageDocument(exported);
+    const restored = await importSkfProject(exported);
+
+    expect(document.assets.filter((entry) => entry.kind === "derived-mesh")).toHaveLength(1);
+    expect(restored.shapes[0].importedMesh?.positions).toEqual(mesh.positions);
+    expect(restored.shapes[1].importedMesh?.positions).toEqual(mesh.positions);
+  });
+
+  it("exports in a far-western timezone without underflowing the ZIP 1980 date floor", async () => {
+    // ZIP stores entry mtimes as DOS dates, and fflate encodes them with local-time
+    // getters, rejecting years outside 1980-2099 with "date not in range 1980-2099".
+    // A UTC-pinned epoch rolls back to 1979 west of UTC, so exercise the fix under the
+    // most extreme western offset. Node re-reads process.env.TZ per Date operation.
+    const originalTz = process.env.TZ;
+    process.env.TZ = "Etc/GMT+12";
+    try {
+      const exported = await exportSkfProject(input([shape("box")]));
+      const restored = await importSkfProject(exported);
+      expect(restored.shapes[0].kind).toBe("box");
+    } finally {
+      if (originalTz === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTz;
+    }
+  });
+
+  it("writes compact project data that stays compatible with the reader limit", async () => {
+    const exported = await exportSkfProject(input([shape("box")]));
+    const { files, document } = packageDocument(exported);
+    const projectJson = strFromU8(files["project.json"]);
+
+    expect(projectJson).toBe(JSON.stringify(document));
+    await expect(importSkfProject(exported)).resolves.toMatchObject({ projectName: "Round trip" });
+  });
+
+  it("refuses to create an .skf package that its reader cannot reopen", async () => {
+    const oversizedName = "x".repeat(SKF_LIMITS.projectJsonBytes);
+
+    await expect(exportSkfProject(input([shape("box")], { projectName: oversizedName })))
+      .rejects.toThrow("Project data exceeds the 64 MB .skf limit");
+  });
+
+  it("migrates the documented v0 JSON project without changing IDs", async () => {
+    const box = shape("box", "legacy-box");
+    const legacy = strToU8(JSON.stringify({
+      schema: SKF_SCHEMA_ID,
+      formatVersion: 0,
+      project: { id: "legacy-project", name: "Legacy", createdAt: 100, modifiedAt: 200 },
+      shapes: [box],
+      workspace: DEFAULT_WORKPLANE_WORKSPACE,
+      snapGrid: "0.5 mm",
+    }));
+
+    const restored = await importSkfProject(legacy);
+
+    expect(restored.migratedFromVersion).toBe(0);
+    expect(restored.sourceProjectId).toBe("legacy-project");
+    expect(restored.shapes[0].id).toBe("legacy-box");
+    expect(restored.snapGrid).toBe("0.5 mm");
+  });
+
+  it("rejects unsupported future versions before restoring any state", async () => {
+    const exported = await exportSkfProject(input([shape("box")]));
+    const future = mutateProject(exported, (document) => {
+      (document as { formatVersion: number }).formatVersion = SKF_DRAWING_FORMAT_VERSION + 1;
+    });
+
+    await expect(importSkfProject(future)).rejects.toThrow("requires a newer Cadverix 3D version");
+  });
+
+  it("rejects missing references, duplicate IDs, cyclic groups, unknown operations, and corrupt assets", async () => {
+    const twoShapes = await exportSkfProject(input([shape("box", "one"), shape("box", "two")]));
+    const missing = mutateProject(twoShapes, (document) => {
+      document.states[0].rootNodeIds[0] = "missing-node";
+    });
+    await expect(importSkfProject(missing)).rejects.toThrow("missing node");
+
+    const duplicate = mutateProject(twoShapes, (document) => {
+      const [first, second] = document.states[0].nodes;
+      second.objectId = first.objectId;
+      second.definition.id = first.objectId;
+    });
+    await expect(importSkfProject(duplicate)).rejects.toThrow("duplicate object ID");
+
+    const grouped = await exportSkfProject(input([shape("mesh", "group-cycle", {
+      groupedShapes: [shape("box", "child-a"), shape("box", "child-b")],
+    })]));
+    const cyclic = mutateProject(grouped, (document) => {
+      const root = document.states[0].nodes.find((node) => node.objectId === "group-cycle")!;
+      root.groupedShapeNodeIds = [root.nodeId];
+    });
+    await expect(importSkfProject(cyclic)).rejects.toThrow("Cyclic group");
+
+    const unknownOperation = mutateProject(grouped, (document) => {
+      document.features[0].type = "unsupported-operation";
+    });
+    await expect(importSkfProject(unknownOperation)).rejects.toThrow("Unknown operation type");
+
+    const legacyMesh = await exportSkfProject(input([shape("mesh", "mesh", {
+      importedMesh: {
+        positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+        baseWidth: 1,
+        baseDepth: 1,
+        baseHeight: 1,
+        triangleCount: 1,
+        sourceFormat: "json",
+      },
+    })]));
+    const { files, document } = packageDocument(legacyMesh);
+    const asset = document.assets.find((entry) => entry.kind === "derived-mesh")!;
+    files[asset.path][20] ^= 0xff;
+    await expect(importSkfProject(zipSync(files))).rejects.toThrow("integrity check");
+  });
+
+  it("stores display edges once instead of repeating them in every undo state", async () => {
+    const edges = displayEdges(4);
+    const placed = shape("box", "cad-box", { cadDisplayEdges: edges, cadDisplayEdgesVersion: 2 });
+    const moved = { ...placed, x: placed.x + 5 };
+    const movedAgain = { ...moved, x: moved.x + 5 };
+    const history = [placed, moved, movedAgain].map((state) => editorHistoryEntry([state], []));
+
+    const exported = await exportSkfProject(input([movedAgain], { history, historyIndex: 2 }));
+    const { document } = packageDocument(exported);
+    const edgeAssets = document.assets.filter((entry) => entry.kind === "display-edges");
+
+    expect(document.states).toHaveLength(3);
+    expect(edgeAssets).toHaveLength(1);
+    document.states.forEach((state) => state.nodes.forEach((node) => {
+      expect(node.definition.cadDisplayEdges).toBeUndefined();
+      expect(node.cadDisplayEdgesAssetId).toBe(edgeAssets[0].id);
+    }));
+
+    const restored = await importSkfProject(exported);
+    expect(restored.shapes[0].cadDisplayEdges).toEqual(edges);
+    expect(restored.shapes[0].cadDisplayEdgesVersion).toBe(2);
+    expect(restored.history).toHaveLength(3);
+    restored.history.forEach((entry) => {
+      expect(entry.shapes[0].cadDisplayEdges).toBe(restored.shapes[0].cadDisplayEdges);
+    });
+  });
+
+  it("keeps an empty display edge list inline and restores it unchanged", async () => {
+    const exported = await exportSkfProject(input([shape("box", "cad-box", { cadDisplayEdges: [], cadDisplayEdgesVersion: 2 })]));
+    const { document } = packageDocument(exported);
+
+    expect(document.assets.filter((entry) => entry.kind === "display-edges")).toHaveLength(0);
+    expect((await importSkfProject(exported)).shapes[0].cadDisplayEdges).toEqual([]);
+  });
+
+  it("encodes and hashes unchanged resources only once across repeated saves", async () => {
+    const project = input([shape("box", "cad-box", { cadDisplayEdges: displayEdges(6), cadDisplayEdgesVersion: 2 })], {
+      assets: [await projectAssetFromBytes("cube.stl", "stl", strToU8("solid cube\nendsolid cube\n"))],
+    });
+    const meshed = shape("mesh", "baked", {
+      importedMesh: {
+        positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+        baseWidth: 1,
+        baseDepth: 1,
+        baseHeight: 1,
+        triangleCount: 1,
+        sourceFormat: "json",
+      },
+    });
+    const shapes = [...project.shapes, meshed];
+    const repeated = { ...project, shapes, history: [editorHistoryEntry(shapes, [])], historyIndex: 0 };
+
+    const first = await exportSkfProject(repeated);
+    const digest = vi.spyOn(globalThis.crypto.subtle, "digest");
+    try {
+      const second = await exportSkfProject(repeated);
+      expect(digest).not.toHaveBeenCalled();
+      expect(strFromU8(packageDocument(second).files["project.json"])).toBe(strFromU8(packageDocument(first).files["project.json"]));
+    } finally {
+      digest.mockRestore();
+    }
+  });
+
+  it("rejects a display edge reference that does not resolve to an edge asset", async () => {
+    const exported = await exportSkfProject(input([shape("box", "cad-box", { cadDisplayEdges: displayEdges(3), cadDisplayEdgesVersion: 2 })]));
+    const broken = mutateProject(exported, (document) => {
+      document.states[0].nodes[0].cadDisplayEdgesAssetId = "display-edges-missing";
+    });
+
+    await expect(importSkfProject(broken)).rejects.toThrow("missing display edge asset");
+  });
+});

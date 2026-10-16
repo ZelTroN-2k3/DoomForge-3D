@@ -1,0 +1,468 @@
+const path = require("node:path");
+const { pathToFileURL } = require("node:url");
+
+if (process.argv?.includes("--mcp-server")) {
+  const mcpServerPath = path.join(__dirname, "..", "..", "scripts", "cadverix-mcp-server.mjs");
+  void import(pathToFileURL(mcpServerPath).href).catch((error) => {
+    process.stderr.write(`Could not start Cadverix 3D MCP: ${error instanceof Error ? error.stack || error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
+} else {
+const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, session, shell } = require("electron");
+const { autoUpdater } = require("electron-updater");
+const { spawn } = require("node:child_process");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+
+app.setName("Cadverix 3D");
+// Retain the installed application's profile across the product-name change.
+// Chromium stores local projects under this directory as well as by origin.
+app.setPath("userData", path.join(app.getPath("appData"), app.isPackaged ? "SketchForge" : "sketchforge"));
+
+const devUrl = (process.env.CADVERIX_DESKTOP_DEV_URL ?? process.env.SKETCHFORGE_DESKTOP_DEV_URL)?.trim() || "";
+// Keep the desktop origin stable. localStorage and IndexedDB are scoped to the
+// full origin (including the port), so a random port made projects appear to
+// vanish after every restart.
+const DESKTOP_PORT = Number.parseInt((process.env.CADVERIX_DESKTOP_PORT ?? process.env.SKETCHFORGE_DESKTOP_PORT) || "62158", 10);
+
+let mainWindow = null;
+let tray = null;
+let webServer = null;
+let webServerOutput = "";
+let isQuitting = false;
+let updaterConfigured = false;
+let desktopIpcConfigured = false;
+let updateCheckInFlight = false;
+let manualUpdateCheck = false;
+let downloadedUpdateReady = false;
+let updateInstallRequested = false;
+let lastUpdateCheckResult = null;
+let lastUpdateCheckError = "";
+let mcpDiscoveryPath = "";
+const mcpToken = app.isPackaged ? crypto.randomBytes(32).toString("base64url") : "";
+
+function appendServerOutput(chunk) {
+  webServerOutput += String(chunk);
+  if (webServerOutput.length > 12_000) {
+    webServerOutput = webServerOutput.slice(-12_000);
+  }
+}
+
+async function waitForServer(url, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+
+  while (Date.now() < deadline) {
+    if (webServer && webServer.exitCode !== null) {
+      throw new Error(`Cadverix 3D web process exited with code ${webServer.exitCode}.`);
+    }
+
+    try {
+      const response = await fetch(url, { redirect: "manual" });
+      if (response.status >= 200 && response.status < 500) return;
+    } catch (error) {
+      lastError = error;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 180));
+  }
+
+  const detail = lastError instanceof Error ? ` ${lastError.message}` : "";
+  throw new Error(`Cadverix 3D did not start its local web process in time.${detail}`);
+}
+
+async function startPackagedWebServer() {
+  const webRoot = path.join(process.resourcesPath, "web");
+  const serverPath = path.join(webRoot, "apps", "web", "server.js");
+  if (!fs.existsSync(serverPath)) {
+    throw new Error(`Desktop web bundle is missing: ${serverPath}`);
+  }
+
+  const port = DESKTOP_PORT;
+  const packagedNodeModules = path.join(process.resourcesPath, "app.asar", "node_modules");
+
+  webServer = spawn(process.execPath, [serverPath], {
+    cwd: path.dirname(serverPath),
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: "1",
+      NODE_PATH: [packagedNodeModules, process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
+      HOSTNAME: "127.0.0.1",
+      PORT: String(port),
+      CADVERIX_DESKTOP: "1",
+      CADVERIX_DESKTOP_VERSION: app.getVersion(),
+      CADVERIX_MCP_TOKEN: mcpToken,
+      CADVERIX_SHARED_PROJECTS_DIR: process.env.CADVERIX_DESKTOP_PROJECTS_DIR || path.join(app.getPath("userData"), "projects"),
+      NEXT_TELEMETRY_DISABLED: "1",
+    },
+  });
+
+  webServer.stdout?.on("data", appendServerOutput);
+  webServer.stderr?.on("data", appendServerOutput);
+
+  const url = `http://127.0.0.1:${port}`;
+  await waitForServer(url);
+  return url;
+}
+
+function removeMcpDiscovery() {
+  if (!mcpDiscoveryPath) return;
+  try {
+    const current = JSON.parse(fs.readFileSync(mcpDiscoveryPath, "utf8"));
+    if (current?.pid === process.pid) fs.unlinkSync(mcpDiscoveryPath);
+  } catch {
+    // A missing or replaced discovery file does not need cleanup.
+  }
+  mcpDiscoveryPath = "";
+}
+
+function publishMcpDiscovery(url) {
+  if (!app.isPackaged || !mcpToken) return;
+  const userDataPath = app.getPath("userData");
+  fs.mkdirSync(userDataPath, { recursive: true, mode: 0o700 });
+  mcpDiscoveryPath = path.join(userDataPath, "cadverix-mcp.json");
+  const temporaryPath = `${mcpDiscoveryPath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+  const payload = `${JSON.stringify({
+    url,
+    token: mcpToken,
+    pid: process.pid,
+    version: app.getVersion(),
+    updatedAt: new Date().toISOString(),
+  }, null, 2)}\n`;
+  fs.writeFileSync(temporaryPath, payload, { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(temporaryPath, mcpDiscoveryPath);
+  try {
+    fs.chmodSync(mcpDiscoveryPath, 0o600);
+  } catch {
+    // Windows ACLs govern access when POSIX modes are unavailable.
+  }
+}
+
+async function installMcpRendererCookie(url) {
+  if (!app.isPackaged || !mcpToken) return;
+  await session.defaultSession.cookies.set({
+    url,
+    name: "cadverix_mcp",
+    value: mcpToken,
+    httpOnly: true,
+    sameSite: "strict",
+    secure: false,
+  });
+}
+
+function stopPackagedWebServer() {
+  if (!webServer || webServer.exitCode !== null) return;
+  try {
+    webServer.kill();
+  } catch {
+    // The process may already be gone while Electron is shutting down.
+  }
+}
+
+function appIconPath() {
+  return devUrl
+    ? path.join(__dirname, "..", "web", "public", "assets", "cadverix", "cadverix-logo.png")
+    : path.join(process.resourcesPath, "web", "apps", "web", "public", "assets", "cadverix", "cadverix-logo.png");
+}
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function installDownloadedUpdate() {
+  if (!downloadedUpdateReady) return;
+  isQuitting = true;
+  stopPackagedWebServer();
+  setImmediate(() => autoUpdater.quitAndInstall(false, true));
+}
+
+async function downloadAndInstallDesktopUpdate() {
+  if (!app.isPackaged) {
+    return desktopUpdatePayload(null, "Updates can only be installed from the packaged Cadverix 3D app.");
+  }
+
+  lastUpdateCheckError = "";
+  try {
+    let result = lastUpdateCheckResult;
+    if (!result?.isUpdateAvailable) {
+      result = await autoUpdater.checkForUpdates();
+      lastUpdateCheckResult = result;
+    }
+    if (!result?.isUpdateAvailable) {
+      return desktopUpdatePayload(result);
+    }
+
+    updateInstallRequested = true;
+    await autoUpdater.downloadUpdate();
+    return desktopUpdatePayload(result);
+  } catch (error) {
+    updateInstallRequested = false;
+    const message = error instanceof Error ? error.message : String(error);
+    lastUpdateCheckError = message;
+    return desktopUpdatePayload(lastUpdateCheckResult, message);
+  }
+}
+
+function desktopUpdatePayload(result = lastUpdateCheckResult, errorMessage = lastUpdateCheckError) {
+  return {
+    currentVersion: app.getVersion(),
+    latestVersion: result?.updateInfo?.version || null,
+    updateAvailable: Boolean(result?.isUpdateAvailable),
+    downloaded: downloadedUpdateReady,
+    checkedAt: new Date().toISOString(),
+    error: errorMessage || undefined,
+  };
+}
+
+async function checkForDesktopUpdates(manual = false) {
+  if (!app.isPackaged) {
+    if (manual) {
+      await dialog.showMessageBox({
+        type: "info",
+        title: "Cadverix 3D updates",
+        message: "Automatic updates are tested from the installed Cadverix 3D app.",
+      });
+    }
+    return desktopUpdatePayload(null);
+  }
+  if (downloadedUpdateReady) {
+    return desktopUpdatePayload();
+  }
+  if (updateCheckInFlight) {
+    return desktopUpdatePayload();
+  }
+
+  manualUpdateCheck = manualUpdateCheck || manual;
+  updateCheckInFlight = true;
+  lastUpdateCheckError = "";
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    lastUpdateCheckResult = result;
+    return desktopUpdatePayload(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    lastUpdateCheckError = message;
+    if (manualUpdateCheck) {
+      dialog.showErrorBox("Could not check for updates", message);
+      manualUpdateCheck = false;
+    }
+    return desktopUpdatePayload(null, message);
+  } finally {
+    updateCheckInFlight = false;
+  }
+}
+
+function setupDesktopIpc() {
+  if (desktopIpcConfigured) return;
+  desktopIpcConfigured = true;
+
+  ipcMain.handle("sketchforge:get-version", () => app.getVersion());
+  ipcMain.handle("sketchforge:check-for-updates", () => checkForDesktopUpdates(false));
+  ipcMain.handle("sketchforge:install-update", () => downloadAndInstallDesktopUpdate());
+}
+
+function setupDesktopUpdater() {
+  if (updaterConfigured || !app.isPackaged) return;
+  updaterConfigured = true;
+
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.allowPrerelease = false;
+
+  autoUpdater.on("update-available", (info) => {
+    if (!manualUpdateCheck) return;
+    manualUpdateCheck = false;
+    void dialog.showMessageBox({
+      type: "info",
+      title: "Cadverix 3D update",
+      message: `Cadverix 3D ${info.version} is available.`,
+      detail: "Open Settings and press Update to install it.",
+    });
+  });
+
+  autoUpdater.on("update-not-available", () => {
+    if (!manualUpdateCheck) return;
+    manualUpdateCheck = false;
+    void dialog.showMessageBox({
+      type: "info",
+      title: "Cadverix 3D updates",
+      message: "Cadverix 3D is up to date.",
+    });
+  });
+
+  autoUpdater.on("download-progress", (progress) => {
+    if (tray) tray.setToolTip(`Cadverix 3D - downloading update ${Math.round(progress.percent)}%`);
+  });
+
+  autoUpdater.on("update-downloaded", (info) => {
+    downloadedUpdateReady = true;
+    if (tray) tray.setToolTip(`Cadverix 3D ${info.version} ready to install`);
+    if (updateInstallRequested) installDownloadedUpdate();
+  });
+
+  autoUpdater.on("error", (error) => {
+    if (tray) tray.setToolTip("Cadverix 3D");
+    if (!manualUpdateCheck) return;
+    manualUpdateCheck = false;
+    dialog.showErrorBox("Could not update Cadverix 3D", error instanceof Error ? error.message : String(error));
+  });
+
+  setTimeout(() => void checkForDesktopUpdates(false), 4_000).unref();
+  setInterval(() => void checkForDesktopUpdates(false), 6 * 60 * 60 * 1000).unref();
+}
+
+function createTray() {
+  if (tray) return;
+
+  const icon = nativeImage.createFromPath(appIconPath()).resize({ width: 20, height: 20 });
+  tray = new Tray(icon);
+  tray.setToolTip("Cadverix 3D");
+  tray.setContextMenu(Menu.buildFromTemplate([
+    {
+      label: "Open Cadverix 3D",
+      click: showMainWindow,
+    },
+    {
+      label: "Check for Updates",
+      click: () => void checkForDesktopUpdates(true),
+    },
+    { type: "separator" },
+    {
+      label: "Quit Cadverix 3D",
+      click: () => {
+        if (downloadedUpdateReady) {
+          installDownloadedUpdate();
+          return;
+        }
+        isQuitting = true;
+        app.quit();
+      },
+    },
+  ]));
+  tray.on("click", showMainWindow);
+}
+
+function createMainWindow(url) {
+  const appOrigin = new URL(url).origin;
+  const iconPath = appIconPath();
+
+  mainWindow = new BrowserWindow({
+    width: 1500,
+    height: 960,
+    minWidth: 1100,
+    minHeight: 700,
+    show: false,
+    title: "Cadverix 3D",
+    icon: iconPath,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      preload: path.join(__dirname, "preload.cjs"),
+    },
+  });
+
+  mainWindow.removeMenu();
+
+  mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    try {
+      const target = new URL(targetUrl);
+      if (target.origin === appOrigin) return { action: "allow" };
+      if (target.protocol === "http:" || target.protocol === "https:") {
+        void shell.openExternal(targetUrl);
+      }
+    } catch {
+      // Ignore malformed URLs instead of handing them to the OS.
+    }
+    return { action: "deny" };
+  });
+
+  mainWindow.webContents.on("will-navigate", (event, targetUrl) => {
+    try {
+      const target = new URL(targetUrl);
+      if (target.origin === appOrigin) return;
+      event.preventDefault();
+      if (target.protocol === "http:" || target.protocol === "https:") {
+        void shell.openExternal(targetUrl);
+      }
+    } catch {
+      event.preventDefault();
+    }
+  });
+
+  mainWindow.once("ready-to-show", () => {
+    mainWindow?.show();
+  });
+
+  mainWindow.on("close", (event) => {
+    if (isQuitting) return;
+    event.preventDefault();
+    mainWindow?.hide();
+  });
+
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+
+  void mainWindow.loadURL(url);
+}
+
+async function startDesktop() {
+  Menu.setApplicationMenu(null);
+
+  try {
+    const url = devUrl || await startPackagedWebServer();
+    await installMcpRendererCookie(url);
+    publishMcpDiscovery(url);
+    setupDesktopIpc();
+    createTray();
+    createMainWindow(url);
+    setupDesktopUpdater();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const detail = webServerOutput.trim();
+    dialog.showErrorBox(
+      "Cadverix 3D could not start",
+      detail ? `${message}\n\n${detail}` : message,
+    );
+    app.quit();
+  }
+}
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", showMainWindow);
+
+  app.whenReady().then(() => {
+    if (process.platform === "win32") app.setAppUserModelId("com.sketchforge.desktop");
+    void startDesktop();
+
+    app.on("activate", () => {
+      if (mainWindow) {
+        showMainWindow();
+      } else if (BrowserWindow.getAllWindows().length === 0) {
+        void startDesktop();
+      }
+    });
+  });
+}
+
+app.on("before-quit", () => {
+  isQuitting = true;
+  removeMcpDiscovery();
+  stopPackagedWebServer();
+});
+
+app.on("window-all-closed", () => {
+  // Keep Cadverix 3D available from the system tray. Use Quit Cadverix 3D
+  // from the tray menu when the user wants to fully stop the application.
+});
+}

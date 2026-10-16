@@ -1,0 +1,137 @@
+import { NextResponse } from "next/server";
+import { timingSafeEqual } from "node:crypto";
+import type { SketchForgeMcpApiPayload } from "@/lib/sketchforgeMcpProtocol";
+import {
+  completeSketchForgeMcpCommand,
+  dispatchSketchForgeMcpCommand,
+  listSketchForgeMcpEditors,
+  registerSketchForgeMcpEditor,
+  waitForSketchForgeMcpCommand,
+} from "@/lib/sketchforgeMcpStore";
+import { SKETCHFORGE_MCP_LONG_POLL_TIMEOUT_MS } from "@/lib/sketchforgeMcpProtocol";
+
+export const revalidate = false;
+
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+function isLocalRequest(request: Request) {
+  const requestUrl = new URL(request.url);
+  if (!LOCAL_HOSTS.has(requestUrl.hostname)) {
+    return false;
+  }
+
+  const origin = request.headers.get("origin");
+  if (origin) {
+    try {
+      const originUrl = new URL(origin);
+      if (originUrl.origin !== requestUrl.origin || !LOCAL_HOSTS.has(originUrl.hostname)) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  const fetchSite = request.headers.get("sec-fetch-site");
+  return !fetchSite || fetchSite === "same-origin" || fetchSite === "none";
+}
+
+function tokensMatch(provided: string, expected: string) {
+  const providedBuffer = Buffer.from(provided);
+  const expectedBuffer = Buffer.from(expected);
+  return providedBuffer.length === expectedBuffer.length && timingSafeEqual(providedBuffer, expectedBuffer);
+}
+
+function requestToken(request: Request) {
+  const authorization = request.headers.get("authorization");
+  if (authorization?.startsWith("Bearer ")) return authorization.slice("Bearer ".length).trim();
+  const cookie = request.headers.get("cookie")
+    ?.split(";")
+    .map((entry) => entry.trim())
+    .find((entry) => entry.startsWith("cadverix_mcp="));
+  return cookie ? cookie.slice("cadverix_mcp=".length) : "";
+}
+
+function localOnly(request: Request) {
+  if (process.env.NODE_ENV === "production" && process.env.CADVERIX_DESKTOP !== "1") {
+    return NextResponse.json({ error: "Cadverix 3D MCP is only available in local development." }, { status: 404 });
+  }
+  if (!isLocalRequest(request)) {
+    return NextResponse.json({ error: "Cadverix 3D MCP only accepts localhost requests." }, { status: 403 });
+  }
+  if (process.env.NODE_ENV === "production") {
+    const expectedToken = process.env.CADVERIX_MCP_TOKEN || "";
+    if (!expectedToken || !tokensMatch(requestToken(request), expectedToken)) {
+      return NextResponse.json({ error: "Cadverix 3D MCP authentication failed." }, { status: 401 });
+    }
+  }
+  return null;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+export async function GET(request: Request) {
+  const blocked = localOnly(request);
+  if (blocked) return blocked;
+  return NextResponse.json({ editors: listSketchForgeMcpEditors() });
+}
+
+export async function POST(request: Request) {
+  const blocked = localOnly(request);
+  if (blocked) return blocked;
+
+  let body: SketchForgeMcpApiPayload;
+  try {
+    body = (await request.json()) as SketchForgeMcpApiPayload;
+  } catch {
+    return NextResponse.json({ error: "Invalid Cadverix 3D MCP request." }, { status: 400 });
+  }
+
+  if (!isObject(body) || typeof body.type !== "string") {
+    return NextResponse.json({ error: "Invalid Cadverix 3D MCP request." }, { status: 400 });
+  }
+
+  if (body.type === "heartbeat") {
+    if (!isObject(body.editor)) {
+      return NextResponse.json({ error: "Invalid editor heartbeat." }, { status: 400 });
+    }
+    registerSketchForgeMcpEditor(body.editor);
+    return NextResponse.json({ ok: true, editors: listSketchForgeMcpEditors() });
+  }
+
+  if (body.type === "poll") {
+    if (typeof body.editorId !== "string") {
+      return NextResponse.json({ error: "Invalid editor poll." }, { status: 400 });
+    }
+    const command = await waitForSketchForgeMcpCommand(body.editorId, {
+      timeoutMs: SKETCHFORGE_MCP_LONG_POLL_TIMEOUT_MS,
+      signal: request.signal,
+    });
+    return NextResponse.json({ command });
+  }
+
+  if (body.type === "result") {
+    if (typeof body.editorId !== "string" || !isObject(body.result) || typeof body.result.commandId !== "string" || typeof body.result.ok !== "boolean") {
+      return NextResponse.json({ error: "Invalid command result." }, { status: 400 });
+    }
+    return NextResponse.json({ ok: completeSketchForgeMcpCommand(body.editorId, body.result) });
+  }
+
+  if (body.type === "command") {
+    if (typeof body.action !== "string") {
+      return NextResponse.json({ error: "Invalid command action." }, { status: 400 });
+    }
+    const result = await dispatchSketchForgeMcpCommand({
+      editorId: typeof body.editorId === "string" ? body.editorId : undefined,
+      editorNumber: typeof body.editorNumber === "number" ? body.editorNumber : undefined,
+      action: body.action,
+      params: isObject(body.params) ? body.params : {},
+      timeoutMs: typeof body.timeoutMs === "number" ? body.timeoutMs : undefined,
+    });
+    return NextResponse.json(result, { status: result.ok ? 200 : 504 });
+  }
+
+  return NextResponse.json({ error: "Unknown Cadverix 3D MCP request." }, { status: 400 });
+}

@@ -1,0 +1,30 @@
+Super nouvelle ! C'est une excellente validation que les collisions et la physique en vue subjective réagissent bien aux géométries du niveau.
+
+Voici les prochaines améliorations naturelles qu'on peut ajouter pour rendre vos mondes encore plus immersifs et fidèles à **Doom** :
+
+---
+
+### 💡 Suggestions pour la suite
+
+1. **🎨 Pack de Textures Rétro Doom (Pixel Art)** :
+   - Appliquer des textures authentiques basse résolution (filtrage net pixel-art *Nearest* de Three.js) sur les murs, sols et plafonds :
+     - *Murs technologiques avec rivets & circuits*,
+     - *Briques sombres de forteresse*,
+     - *Sols en dalles industrielles / grilles métalliques*,
+     - *Liquide toxique vert (Nukage) ou Lave animée*.
+
+2. **🚪 Portes automatiques & Système de Clés (Keycards)** :
+   - Pouvoir placer des portes qui coulissent vers le haut à l'approche du joueur ou qui nécessitent la **Keycard rouge, bleue ou jaune** pour s'ouvrir.
+
+3. **🔥 Attaques à distance des monstres (Boules de feu de l'Imp)** :
+   - Permettre aux Imps de lancer des boules de feu lumineuses vers le joueur lorsqu'il est à portée, avec esquive possible.
+
+4. **🪜 Gestion des marches / Escaliers (*Step-up*)** :
+   - Pouvoir monter automatiquement de petites marches (dénivelés d'escaliers) sans être bloqué par les collisions.
+
+5. **⚡ Téléporteurs fonctionnels** :
+   - Placer deux pads de téléportation pour voyager instantanément d'une pièce à une autre.
+
+---
+
+Laquelle de ces fonctionnalités aimeriez-vous intégrer en premier (ou avez-vous une autre idée en tête) ?

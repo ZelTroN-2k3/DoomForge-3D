@@ -1,0 +1,11 @@
+export type ProjectExportFormat = "stl" | "3mf" | "obj" | "step" | "svg" | "skf" | "lyl";
+
+export function projectExportFileName(projectName: string, format: ProjectExportFormat) {
+  const safeProjectName = projectName
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
+    .replace(/\s+/g, " ")
+    .replace(/[. ]+$/g, "")
+    .slice(0, 120);
+  return `${safeProjectName || "DoomForge 3D level"}.${format}`;
+}

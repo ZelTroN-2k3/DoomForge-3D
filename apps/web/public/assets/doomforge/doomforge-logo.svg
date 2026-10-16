@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
+  <title id="title">DoomForge 3D</title>
+  <desc id="description">A high-tech industrial badge with a fiery cyber-portal, stylized DF monogram, 3D grid and combat crosshair for retro FPS level design.</desc>
+  <defs>
+    <!-- Background Shield Gradient -->
+    <linearGradient id="shieldGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1e0a0a"/>
+      <stop offset="50%" stop-color="#120c18"/>
+      <stop offset="100%" stop-color="#08070b"/>
+    </linearGradient>
+
+    <!-- Fiery Core Glow -->
+    <radialGradient id="portalGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ff7b00" stop-opacity="0.85"/>
+      <stop offset="35%" stop-color="#ff2200" stop-opacity="0.5"/>
+      <stop offset="70%" stop-color="#7a0018" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#120c18" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Metallic Bevel -->
+    <linearGradient id="metalBevel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ff6a00"/>
+      <stop offset="40%" stop-color="#e61c1c"/>
+      <stop offset="100%" stop-color="#3d1414"/>
+    </linearGradient>
+
+    <!-- 3D Monogram Facet Gradients -->
+    <linearGradient id="facetTop" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffaa00"/>
+      <stop offset="100%" stop-color="#ff4400"/>
+    </linearGradient>
+    <linearGradient id="facetLeft" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ff3300"/>
+      <stop offset="100%" stop-color="#990011"/>
+    </linearGradient>
+    <linearGradient id="facetRight" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#cc1111"/>
+      <stop offset="100%" stop-color="#4d0008"/>
+    </linearGradient>
+
+    <clipPath id="shieldClip">
+      <polygon points="256,20 480,90 480,360 256,492 32,360 32,90"/>
+    </clipPath>
+  </defs>
+
+  <!-- Outer Octagonal Combat Badge -->
+  <polygon points="256,16 484,88 484,364 256,496 28,364 28,88" fill="#ff4400" opacity="0.3"/>
+  <polygon points="256,20 480,90 480,360 256,492 32,360 32,90" fill="url(#shieldGrad)" stroke="#ff4400" stroke-width="4"/>
+
+  <!-- Portal Glow & 3D Level Grid -->
+  <g clip-path="url(#shieldClip)">
+    <circle cx="256" cy="256" r="230" fill="url(#portalGlow)"/>
+    <!-- Perspective Floor Grid (Doom Map Editor Grid) -->
+    <g stroke="#ff5500" stroke-width="1.5" opacity="0.25">
+      <line x1="256" y1="256" x2="32" y2="440"/>
+      <line x1="256" y1="256" x2="100" y2="470"/>
+      <line x1="256" y1="256" x2="180" y2="488"/>
+      <line x1="256" y1="256" x2="256" y2="492"/>
+      <line x1="256" y1="256" x2="332" y2="488"/>
+      <line x1="256" y1="256" x2="412" y2="470"/>
+      <line x1="256" y1="256" x2="480" y2="440"/>
+      <!-- Grid Horizontals -->
+      <path d="M120,330 Q256,350 392,330" fill="none"/>
+      <path d="M80,380 Q256,410 432,380" fill="none"/>
+      <path d="M50,430 Q256,470 462,430" fill="none"/>
+    </g>
+  </g>
+
+  <!-- Industrial Inner Border -->
+  <polygon points="256,36 462,102 462,350 256,472 50,350 50,102" fill="none" stroke="#2e1a22" stroke-width="3"/>
+  <polygon points="256,42 454,108 454,344 256,464 58,344 58,108" fill="none" stroke="#ff3b00" stroke-width="1.5" opacity="0.4"/>
+
+  <!-- 3D Monogram "D" & "F" (DoomForge) -->
+  <g transform="translate(0, -10)">
+    <!-- Stylized 3D Faceted D Shape -->
+    <!-- D Spine (Left Bar) -->
+    <polygon points="120,130 175,130 175,350 120,350" fill="url(#facetLeft)" stroke="#ff7700" stroke-width="2"/>
+    <polygon points="120,130 145,105 200,105 175,130" fill="url(#facetTop)"/>
+    
+    <!-- D Arch Top -->
+    <polygon points="175,130 260,130 295,170 245,170 200,105 145,105" fill="url(#facetTop)"/>
+    <!-- D Arch Outer Curve / Angle -->
+    <polygon points="260,130 305,175 305,295 255,345 200,345 175,350 175,305 235,305 260,280 260,195 235,170 175,170" fill="url(#facetRight)" stroke="#ff4400" stroke-width="2"/>
+    <!-- D Arch Front Face -->
+    <polygon points="175,130 260,130 300,170 300,300 260,340 175,340 175,300 240,300 265,275 265,195 240,170 175,170" fill="url(#facetLeft)"/>
+
+    <!-- Central "F" Cutout / Forge Blade inside D -->
+    <polygon points="195,185 245,185 235,210 195,210" fill="#ffe600" opacity="0.9"/>
+    <polygon points="195,225 230,225 220,248 195,248" fill="#ffaa00" opacity="0.9"/>
+
+    <!-- Combat Crosshair / Targeting Reticle -->
+    <g stroke="#00e5ff" stroke-width="3" opacity="0.95">
+      <!-- Crosshair Center Ring -->
+      <circle cx="256" cy="245" r="42" fill="none" stroke="#ff3300" stroke-width="3.5" stroke-dasharray="16 10"/>
+      <circle cx="256" cy="245" r="14" fill="#ff2200" fill-opacity="0.3" stroke="#00ffff" stroke-width="2"/>
+      <circle cx="256" cy="245" r="3" fill="#ffffff"/>
+      <!-- Targeting Lines -->
+      <line x1="256" y1="180" x2="256" y2="200" stroke-linecap="round"/>
+      <line x1="256" y1="290" x2="256" y2="310" stroke-linecap="round"/>
+      <line x1="190" y1="245" x2="210" y2="245" stroke-linecap="round"/>
+      <line x1="302" y1="245" x2="322" y2="245" stroke-linecap="round"/>
+      <!-- Precision ticks -->
+      <path d="M226,215 L232,221 M286,215 L280,221 M226,275 L232,269 M286,275 L280,269" stroke="#00ffff" stroke-width="2"/>
+    </g>
+  </g>
+
+  <!-- Bottom Banner: DOOMFORGE 3D -->
+  <g transform="translate(0, 10)">
+    <polygon points="100,410 412,410 390,446 122,446" fill="#14080b" stroke="#ff4400" stroke-width="2.5"/>
+    <text x="256" y="436" font-family="'Impact', 'Arial Black', sans-serif" font-size="26" font-weight="900" fill="#fff" text-anchor="middle" letter-spacing="4">
+      DOOM<tspan fill="#ff4400">FORGE</tspan> <tspan fill="#00e5ff" font-size="20">3D</tspan>
+    </text>
+  </g>
+
+  <!-- Corner Tech Bolt Rivets -->
+  <g fill="#ff5500" stroke="#220000" stroke-width="2">
+    <circle cx="62" cy="115" r="6"/>
+    <circle cx="450" cy="115" r="6"/>
+    <circle cx="256" cy="46" r="6"/>
+    <circle cx="62" cy="338" r="6"/>
+    <circle cx="450" cy="338" r="6"/>
+  </g>
+</svg>

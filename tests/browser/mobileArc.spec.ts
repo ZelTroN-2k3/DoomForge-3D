@@ -1,0 +1,65 @@
+import { expect, test } from "@playwright/test";
+
+test("three-point arc uses endpoints then bulge, with preview, cancellation and one-step undo", async ({ page }) => {
+  await page.goto("/?editor=1");
+  await page.getByRole("tab", { name: "Sketch", exact: true }).tap();
+  await page.getByRole("button", { name: "Sketch to 3D options" }).tap();
+  await page.getByRole("menuitem", { name: /^Extrude sketch/ }).tap();
+  await expect(page.locator(".sketch-plate")).toBeVisible();
+  await page.getByRole("button", { name: "Three-point Arc", exact: true }).tap();
+  await page.touchscreen.tap(600, 600);
+  await page.touchscreen.tap(600, 600);
+  await expect(page.locator(".sketch-arc-help")).toContainText("different end point");
+  await page.touchscreen.tap(850, 600);
+  await expect(page.locator(".sketch-segments path")).toHaveCount(0);
+  await page.touchscreen.tap(725, 600);
+  await expect(page.locator(".sketch-arc-help")).toContainText("away from the straight line");
+  await expect(page.locator(".sketch-segments path")).toHaveCount(0);
+  await page.mouse.move(725, 460);
+  await expect(page.locator(".sketch-arc-preview path")).toHaveAttribute("d", / A /);
+  await page.touchscreen.tap(725, 460);
+  const segments = page.locator(".sketch-segments path");
+  await expect.poll(() => segments.count()).toBeGreaterThan(0);
+  const paths = await segments.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("d")));
+  expect(paths.every((d) => d?.includes("C"))).toBe(true);
+  await page.getByRole("button", { name: "Sketch undo", exact: true }).tap();
+  await expect(segments).toHaveCount(0);
+  await page.getByRole("button", { name: "Sketch redo", exact: true }).tap();
+  await expect(segments).toHaveCount(paths.length);
+
+  await page.touchscreen.tap(600, 750);
+  await page.getByRole("button", { name: "Cancel arc", exact: true }).tap();
+  await expect(page.locator(".sketch-arc-preview")).toHaveCount(0);
+  await expect(segments).toHaveCount(paths.length);
+  await page.touchscreen.tap(600, 750);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".sketch-arc-preview")).toHaveCount(0);
+  await page.getByRole("button", { name: "Three-point Arc", exact: true }).tap();
+  await page.touchscreen.tap(600, 750);
+  await page.getByRole("button", { name: "Bezier Curve", exact: true }).tap();
+  await expect(page.locator(".sketch-arc-preview")).toHaveCount(0);
+  await expect(segments).toHaveCount(paths.length);
+});
+
+test("two arcs sharing tapped endpoints form a closed profile", async ({ page }) => {
+  await page.goto("/?editor=1");
+  await page.getByRole("tab", { name: "Sketch", exact: true }).tap();
+  await page.getByRole("button", { name: "Sketch to 3D options" }).tap();
+  await page.getByRole("menuitem", { name: /^Extrude sketch/ }).tap();
+  await expect(page.locator(".sketch-plate")).toBeVisible();
+  await page.getByRole("button", { name: "Three-point Arc", exact: true }).tap();
+  await page.touchscreen.tap(600, 600);
+  await page.touchscreen.tap(850, 600);
+  await page.touchscreen.tap(725, 460);
+  const count = await page.locator(".sketch-points circle").count();
+  await page.touchscreen.tap(600, 600);
+  await page.touchscreen.tap(850, 600);
+  await page.touchscreen.tap(725, 740);
+  await expect(page.locator(".sketch-profile-fills path")).toHaveCount(1);
+  await expect(page.locator(".sketch-profile-hit-targets path")).toHaveCount(1);
+  expect(await page.locator(".sketch-points circle").count()).toBeLessThan(count * 2);
+  await page.getByRole("button", { name: "Sketch undo", exact: true }).tap();
+  await expect(page.locator(".sketch-profile-fills path")).toHaveCount(0);
+  await page.getByRole("button", { name: "Sketch redo", exact: true }).tap();
+  await expect(page.locator(".sketch-profile-fills path")).toHaveCount(1);
+});
