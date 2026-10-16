@@ -103,7 +103,7 @@ async function latestOfficialVersion(force = false) {
   try {
     const response = await fetch((process.env.CADVERIX_UPDATE_MANIFEST_URL ?? process.env.SKETCHFORGE_UPDATE_MANIFEST_URL)?.trim() || DEFAULT_MANIFEST_URL, {
       cache: "no-store",
-      headers: { Accept: "application/json", "User-Agent": "Cadverix 3D update checker" },
+      headers: { Accept: "application/json", "User-Agent": "DoomForge 3D update checker" },
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`Update server returned ${response.status}`);
@@ -159,7 +159,7 @@ async function runLocalUpdate(repoRoot: string, expectedVersion: string) {
   const gitOptions = { cwd: repoRoot, timeout: 120_000, maxBuffer: 2 * 1024 * 1024 };
   const { stdout: dirtyOutput } = await execFileAsync("git", ["status", "--porcelain", "--untracked-files=no"], gitOptions);
   if (dirtyOutput.trim()) {
-    throw new Error("Local Cadverix 3D has uncommitted code changes. Commit or stash them before updating so the updater does not overwrite your work.");
+    throw new Error("Local DoomForge 3D has uncommitted code changes. Commit or stash them before updating so the updater does not overwrite your work.");
   }
 
   await execFileAsync("git", ["fetch", "--no-tags", OFFICIAL_REPO_URL, "main"], gitOptions);
@@ -211,7 +211,7 @@ export async function POST(request: Request) {
     const status = await statusResponse(request, true);
     if (status.checkError) return NextResponse.json({ error: status.checkError }, { status: 502 });
     if (!status.updateAvailable || !status.latestVersion) {
-      return NextResponse.json({ error: "Cadverix 3D is already up to date", status }, { status: 409 });
+      return NextResponse.json({ error: "DoomForge 3D is already up to date", status }, { status: 409 });
     }
 
     nextTriggerAt = Date.now() + UPDATE_TRIGGER_COOLDOWN_MS;
@@ -229,7 +229,7 @@ export async function POST(request: Request) {
       );
     } catch (error) {
       nextTriggerAt = 0;
-      return NextResponse.json({ error: error instanceof Error ? error.message : "Could not update local Cadverix 3D" }, { status: 409 });
+      return NextResponse.json({ error: error instanceof Error ? error.message : "Could not update local DoomForge 3D" }, { status: 409 });
     }
   }
 
@@ -253,7 +253,7 @@ export async function POST(request: Request) {
   const status = await statusResponse(request, true);
   if (status.checkError) return NextResponse.json({ error: status.checkError }, { status: 502 });
   if (!status.updateAvailable || !status.latestVersion) {
-    return NextResponse.json({ error: "Cadverix 3D is already up to date", status }, { status: 409 });
+    return NextResponse.json({ error: "DoomForge 3D is already up to date", status }, { status: 409 });
   }
 
   nextTriggerAt = Date.now() + UPDATE_TRIGGER_COOLDOWN_MS;
@@ -269,7 +269,7 @@ export async function POST(request: Request) {
         ...(triggerToken ? { Authorization: `Bearer ${triggerToken}` } : {}),
       },
       body: JSON.stringify({
-        application: "Cadverix 3D",
+        application: "DoomForge 3D",
         currentVersion: status.currentVersion,
         latestVersion: status.latestVersion,
         preserveProjectStorage: true,
